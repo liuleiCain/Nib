@@ -1,5 +1,5 @@
 import { EditorState, Compartment } from '@codemirror/state';
-import type { Extension, Text } from '@codemirror/state';
+import type { ChangeSpec, Extension, Text } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { basicSetup } from 'codemirror';
 import { indentWithTab } from '@codemirror/commands';
@@ -16,6 +16,8 @@ export interface Tab {
   newline: Document['newline'];
   hasBom: boolean;
   scroll: { top: number; left: number };
+  /** 外部修改与未保存编辑冲突、文件无法读取或自动保存失败时暂停自动保存，避免覆盖外部修改。 */
+  paused: boolean;
 }
 
 export const wrapCompartment = new Compartment();
@@ -167,6 +169,29 @@ export async function createTab(
     newline: document.newline,
     hasBom: document.hasBom,
     scroll: { top: 0, left: 0 },
+    paused: false,
+  };
+}
+
+/** 磁盘新内容与当前文档的最小替换区间；未变化部分的光标、选区和滚动位置得以保留。 */
+export function diffChange(doc: Text, next: string): ChangeSpec | null {
+  const current = doc.toString();
+  if (current === next) return null;
+  const max = Math.min(current.length, next.length);
+  let start = 0;
+  while (start < max && current.charCodeAt(start) === next.charCodeAt(start))
+    start++;
+  let end = 0;
+  while (
+    end < max - start &&
+    current.charCodeAt(current.length - 1 - end) ===
+      next.charCodeAt(next.length - 1 - end)
+  )
+    end++;
+  return {
+    from: start,
+    to: current.length - end,
+    insert: next.slice(start, next.length - end),
   };
 }
 

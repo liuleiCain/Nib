@@ -13,7 +13,10 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Nib",
+        "tabbingIdentifier": "nib-projects",
+        "theme": "Dark",
         "width": 1200,
         "height": 800,
         "minWidth": 720,

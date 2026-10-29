@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
+import { Transaction } from '@codemirror/state';
 import type { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { redo, undo } from '@codemirror/commands';
 import { openSearchPanel } from '@codemirror/search';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
   ArrowDownToLine,
   ArrowRight,
   Check,
+  ChevronDown,
   ChevronRight,
   ChevronsLeftRight,
   Command,
@@ -30,16 +33,24 @@ import {
   X,
 } from 'lucide-react';
 import { backend, desktop, errorMessage } from '../lib/backend';
-import type { Project } from '../lib/backend';
+import type {
+  FileChanges,
+  Project,
+  ProjectTabs,
+  RecentProject,
+} from '../lib/backend';
 import { Editor } from '../features/editor/Editor';
 import {
   createTab,
+  diffChange,
   isDirty,
   languageName,
   serialize,
 } from '../features/editor/model';
 import type { Tab } from '../features/editor/model';
 import { Explorer } from '../features/explorer/Explorer';
+import type { TreeChanges } from '../features/explorer/Explorer';
+import { ProjectMenu, RecentList } from '../features/projects/ProjectMenu';
 
 type Decision = 'save' | 'discard' | 'cancel';
 interface Prompt {
@@ -56,6 +67,8 @@ interface PaletteCommand {
 const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const mod = mac ? '⌘' : 'Ctrl';
 const baseName = (path: string) => path.split('/').pop() ?? path;
+/** 停止输入后自动保存的等待时间。 */
+const AUTO_SAVE_DELAY = 1000;
 
 /** 主窗口协调工作区、编辑状态和用户确认，磁盘操作统一交给后台。 */
 export function App() {
@@ -85,15 +98,33 @@ export function App() {
   const [commandIndex, setCommandIndex] = useState(0);
   const [settings, setSettings] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
+  const [recent, setRecent] = useState<RecentProject[]>([]);
+  const [projectMenu, setProjectMenu] = useState(false);
+  const restoring = useRef(false);
+  const started = useRef(false);
+  const [autoSave, setAutoSave] = useState(true);
+  const autoSaveRef = useRef(true);
+  const autoSaveTimer = useRef<number | null>(null);
+  const [treeChanges, setTreeChanges] = useState<TreeChanges>({
+    key: 0,
+    paths: null,
+  });
+  // 正在与磁盘同步的标签，及同步期间又收到变化需重读的标签。
+  const syncing = useRef(new Set<string>());
+  const resync = useRef(new Set<string>());
+  const applyingDisk = useRef(false);
   const viewRef = useRef<EditorView | null>(null);
   const paletteRef = useRef<HTMLInputElement>(null);
   const selected = tabs.find((tab) => tab.path === active);
   const dirtyCount = tabs.filter(isDirty).length;
   const operations = useRef({
     openProject: () => {},
+    newWindow: () => {},
     save: () => {},
     close: () => {},
     palette: () => {},
+    autoSave: () => {},
+    filesChanged: (_changes: FileChanges) => {},
   });
 
   function updateTabs(next: Tab[]) {
@@ -124,7 +155,8 @@ export function App() {
     current?.resolve(decision);
   }
 
-  async function saveTab(tab: Tab): Promise<boolean> {
+  /** 保存标签；自动保存不弹成功提示，失败后暂停该标签的自动保存直到手动保存或重新加载。 */
+  async function saveTab(tab: Tab, auto = false): Promise<boolean> {
     const existing = saves.current.get(tab.path);
     if (existing) return existing;
     const workspace = projectRef.current;
@@ -143,11 +175,17 @@ export function App() {
         if (projectRef.current?.id !== workspace.id) return false;
         tab.revision = revision;
         tab.savedDoc = snapshot;
+        tab.paused = false;
         updateTabs(tabsRef.current);
-        notify(`已保存 ${baseName(tab.path)}`, false);
+        if (!auto) notify(`已保存 ${baseName(tab.path)}`, false);
         return true;
       } catch (error) {
-        notify(`${baseName(tab.path)}：${errorMessage(error)}`);
+        if (projectRef.current?.id !== workspace.id) return false;
+        tab.paused = true;
+        updateTabs(tabsRef.current);
+        notify(
+          `${baseName(tab.path)}：${errorMessage(error)}${auto ? ' 已暂停该文件的自动保存。' : ''}`,
+        );
         return false;
       } finally {
         saves.current.delete(tab.path);
@@ -167,6 +205,10 @@ export function App() {
       const pending = saves.current.get(tab.path);
       if (pending && !(await pending)) return false;
     }
+    // 开启自动保存时先静默保存，只有暂停或保存失败的文件才需要用户确认。
+    if (autoSaveRef.current)
+      for (const tab of candidates)
+        if (isDirty(tab) && !tab.paused) await saveTab(tab, true);
     const dirty = candidates.filter(isDirty);
     if (!dirty.length) return true;
     const decision = await ask(dirty.map((tab) => tab.path));
@@ -177,36 +219,297 @@ export function App() {
     return candidates.every((tab) => !isDirty(tab));
   }
 
-  async function openProject() {
+  /** 停止输入后自动保存；暂停的、冲突的或正在同步的标签跳过。 */
+  function autoSaveAll() {
+    if (!autoSaveRef.current || promptRef.current) return;
+    for (const tab of tabsRef.current)
+      if (isDirty(tab) && !tab.paused && !syncing.current.has(tab.path))
+        void saveTab(tab, true);
+  }
+
+  function scheduleAutoSave() {
+    if (autoSaveTimer.current !== null)
+      window.clearTimeout(autoSaveTimer.current);
+    if (!autoSaveRef.current) return;
+    autoSaveTimer.current = window.setTimeout(() => {
+      autoSaveTimer.current = null;
+      autoSaveAll();
+    }, AUTO_SAVE_DELAY);
+  }
+
+  /**
+   * 外部修改后让标签与磁盘一致。
+   *
+   * 无未保存编辑时就地替换为磁盘内容，保留光标、滚动和撤销历史；有未保存编辑且磁盘也变化时
+   * 标记冲突并暂停自动保存，由用户选择重新加载或手动保存（保存仍会因版本冲突停止，不覆盖外部修改）。
+   */
+  async function syncTab(path: string) {
+    const workspace = projectRef.current;
+    if (!workspace) return;
+    // 正在保存或同步时先排队，完成后再读一次，避免读到自己写入一半的结果。
+    if (syncing.current.has(path) || saves.current.has(path)) {
+      resync.current.add(path);
+      const pending = saves.current.get(path);
+      if (pending)
+        void pending.then(() => {
+          if (resync.current.delete(path)) void syncTab(path);
+        });
+      return;
+    }
+    syncing.current.add(path);
+    try {
+      const document = await backend.readFile(workspace.id, path);
+      const tab = tabsRef.current.find((item) => item.path === path);
+      if (!tab || projectRef.current?.id !== workspace.id) return;
+      // 自己保存产生的事件：磁盘版本未变，无需处理。
+      if (document.revision === tab.revision) {
+        if (tab.paused && !isDirty(tab)) {
+          tab.paused = false;
+          updateTabs(tabsRef.current);
+        }
+        return;
+      }
+      if (isDirty(tab)) {
+        // 编辑内容恰好与磁盘一致，直接接受新版本。
+        if (tab.state.doc.toString() === document.content) {
+          tab.revision = document.revision;
+          tab.savedDoc = tab.state.doc;
+          tab.paused = false;
+          updateTabs(tabsRef.current);
+          return;
+        }
+        if (!tab.paused) {
+          tab.paused = true;
+          updateTabs(tabsRef.current);
+          notify(
+            `${baseName(path)} 已被外部修改，与未保存的编辑冲突。已暂停自动保存，可重新加载磁盘版本。`,
+          );
+        }
+        return;
+      }
+      applyDisk(tab, document);
+    } catch (error) {
+      const tab = tabsRef.current.find((item) => item.path === path);
+      if (!tab || projectRef.current?.id !== workspace.id) return;
+      // 文件被删除、改名或变为不可编辑：保留编辑内容，暂停自动保存，避免重新写回。
+      if (!tab.paused) {
+        tab.paused = true;
+        updateTabs(tabsRef.current);
+        notify(
+          `${baseName(path)}：${errorMessage(error)} 已暂停该文件的自动保存。`,
+        );
+      }
+    } finally {
+      syncing.current.delete(path);
+      if (resync.current.delete(path)) void syncTab(path);
+    }
+  }
+
+  /** 用磁盘内容就地更新干净标签；当前标签通过视图更新，非当前标签直接更新状态。 */
+  function applyDisk(
+    tab: Tab,
+    document: Awaited<ReturnType<typeof backend.readFile>>,
+  ) {
+    const change = diffChange(tab.state.doc, document.content);
+    const view = viewRef.current;
+    if (change) {
+      // 外部写入不进入撤销历史，避免撤销时把 AI 写入的内容退回。
+      const spec = {
+        changes: change,
+        annotations: Transaction.addToHistory.of(false),
+      };
+      if (view && activeRef.current === tab.path && view.state === tab.state) {
+        // 标记为磁盘同步，editorChange 不会因此触发自动保存。
+        applyingDisk.current = true;
+        try {
+          view.dispatch(spec);
+        } finally {
+          applyingDisk.current = false;
+        }
+        tab.state = view.state;
+      } else {
+        tab.state = tab.state.update(spec).state;
+      }
+    }
+    tab.savedDoc = tab.state.doc;
+    tab.revision = document.revision;
+    tab.newline = document.newline;
+    tab.hasBom = document.hasBom;
+    tab.paused = false;
+    updateTabs(tabsRef.current);
+  }
+
+  /** 后台推送一批文件变化：刷新文件树并同步受影响的已打开标签。 */
+  function filesChanged(changes: FileChanges) {
+    const workspace = projectRef.current;
+    if (!workspace || changes.projectId !== workspace.id) return;
+    setTreeChanges((previous) => ({
+      key: previous.key + 1,
+      paths: changes.rescan ? null : changes.paths,
+    }));
+    const changed = new Set(changes.paths);
+    for (const tab of tabsRef.current)
+      if (changes.rescan || changed.has(tab.path)) void syncTab(tab.path);
+  }
+
+  function refreshRecent() {
+    if (!desktop) return;
+    backend
+      .recentProjects()
+      .then(setRecent)
+      .catch((error) => notify(errorMessage(error)));
+  }
+
+  function setWindowTitle(next: Project | null) {
+    void getCurrentWindow()
+      .setTitle(next ? `${next.name} — Nib` : 'Nib')
+      .catch((error) => notify(errorMessage(error)));
+  }
+
+  /** 记录当前项目的标签，恢复期间不覆盖上次的记录。 */
+  function persistTabs() {
+    const workspace = projectRef.current;
+    if (!desktop || !workspace || restoring.current) return;
+    backend
+      .saveTabs(
+        workspace.id,
+        tabsRef.current.map((tab) => tab.path),
+        activeRef.current,
+      )
+      .catch((error) => {
+        if (projectRef.current?.id === workspace.id)
+          notify(`标签记录保存失败：${errorMessage(error)}`);
+      });
+  }
+
+  /** 按上次顺序重新读取标签；单个文件失败时跳过并汇总提示。 */
+  async function restoreTabs(workspace: Project, saved: ProjectTabs) {
+    if (!saved.tabs.length) return;
+    restoring.current = true;
+    setOpening(saved.active ?? saved.tabs[0]);
+    const failed: string[] = [];
+    try {
+      for (const path of saved.tabs.slice(0, 30)) {
+        try {
+          const tab = await createTab(
+            path,
+            await backend.readFile(workspace.id, path),
+          );
+          if (projectRef.current?.id !== workspace.id) return;
+          if (tabsRef.current.some((item) => item.path === path)) continue;
+          updateTabs([...tabsRef.current, tab]);
+          if (!activeRef.current || path === saved.active) activate(path);
+        } catch {
+          if (projectRef.current?.id !== workspace.id) return;
+          failed.push(baseName(path));
+        }
+      }
+      if (failed.length)
+        notify(
+          `${failed.length} 个上次打开的文件无法恢复：${failed.join('、')}`,
+        );
+    } finally {
+      if (projectRef.current?.id === workspace.id) {
+        restoring.current = false;
+        setOpening(null);
+        persistTabs();
+      }
+    }
+  }
+
+  /** 在当前窗口打开项目；调用方负责处理当前项目的未保存内容。 */
+  async function loadProject(path: string) {
+    const result = await backend.openProject(path);
+    if (result.kind === 'focused') return;
+    const next = result.project;
+    desiredFile.current = null;
+    restoring.current = false;
+    projectRef.current = next;
+    setProject(next);
+    updateTabs([]);
+    activate(null);
+    setOpening(null);
+    setNotice(result.warning ? { text: result.warning, error: true } : null);
+    setSidebar(true);
+    setWindowTitle(next);
+    refreshRecent();
+    await restoreTabs(next, result.tabs);
+  }
+
+  /** 已有项目时在新项目标签打开，空标签直接在当前标签打开。 */
+  async function openRecent(root: string, here = false) {
     if (!desktop || busyRef.current || promptRef.current) return;
+    setProjectMenu(false);
     busyRef.current = true;
     setBusy('打开项目');
     try {
-      const path = await open({
-        directory: true,
-        multiple: false,
-        title: '选择 Nib 项目文件夹',
-      });
-      if (typeof path !== 'string' || !(await mayDiscard(tabsRef.current)))
-        return;
-      const next = await backend.openProject(path);
+      if (projectRef.current && !here) {
+        await backend.openProjectWindow(root);
+      } else if (await mayDiscard(tabsRef.current)) {
+        await loadProject(root);
+      }
+    } catch (error) {
+      notify(errorMessage(error));
+      refreshRecent();
+    } finally {
+      busyRef.current = false;
+      setBusy(null);
+    }
+  }
+
+  async function openProject() {
+    if (!desktop || busyRef.current || promptRef.current) return;
+    setProjectMenu(false);
+    const path = await open({
+      directory: true,
+      multiple: false,
+      title: '选择 Nib 项目文件夹',
+    }).catch((error) => {
+      notify(errorMessage(error));
+      return null;
+    });
+    if (typeof path === 'string') await openRecent(path);
+  }
+
+  async function closeProject() {
+    if (!desktop || busyRef.current || promptRef.current) return;
+    setProjectMenu(false);
+    busyRef.current = true;
+    setBusy('关闭项目');
+    try {
+      if (!(await mayDiscard(tabsRef.current))) return;
+      await backend.closeProject();
       desiredFile.current = null;
-      projectRef.current = next;
-      setProject(next);
+      restoring.current = false;
+      projectRef.current = null;
+      setProject(null);
       updateTabs([]);
       activate(null);
       setOpening(null);
       setNotice(null);
-      setSidebar(true);
-      void getCurrentWindow()
-        .setTitle(`${next.name} — Nib`)
-        .catch((error) => notify(errorMessage(error)));
+      setWindowTitle(null);
+      refreshRecent();
     } catch (error) {
       notify(errorMessage(error));
     } finally {
       busyRef.current = false;
       setBusy(null);
     }
+  }
+
+  function newWindow() {
+    if (!desktop) return;
+    setProjectMenu(false);
+    backend.newWindow().catch((error) => notify(errorMessage(error)));
+  }
+
+  async function forgetProject(root: string) {
+    try {
+      await backend.forgetProject(root);
+    } catch (error) {
+      notify(errorMessage(error));
+    }
+    refreshRecent();
   }
 
   async function openFile(path: string) {
@@ -300,8 +603,10 @@ export function App() {
   function editorChange(path: string, state: EditorState) {
     const tab = tabsRef.current.find((item) => item.path === path);
     if (tab) {
+      const edited = !applyingDisk.current && !tab.state.doc.eq(state.doc);
       tab.state = state;
       updateTabs(tabsRef.current);
+      if (edited) scheduleAutoSave();
     }
   }
 
@@ -318,6 +623,27 @@ export function App() {
       detail: `${mod} O`,
       action: () => void openProject(),
       disabled: !desktop,
+    },
+    {
+      label: '新建项目标签',
+      detail: `${mod} ⇧ N`,
+      action: newWindow,
+      disabled: !desktop,
+    },
+    {
+      label: '最近项目',
+      detail: '项目',
+      action: () => {
+        refreshRecent();
+        setProjectMenu(true);
+      },
+      disabled: !desktop,
+    },
+    {
+      label: '关闭项目',
+      detail: '项目',
+      action: () => void closeProject(),
+      disabled: !project,
     },
     {
       label: '保存当前文件',
@@ -391,6 +717,11 @@ export function App() {
       action: () => setSidebar((value) => !value),
     },
     {
+      label: '切换自动保存',
+      detail: autoSave ? '已启用' : '未启用',
+      action: () => setAutoSave((value) => !value),
+    },
+    {
       label: '切换自动换行',
       detail: wrap ? '已启用' : '未启用',
       action: () => setWrap((value) => !value),
@@ -409,6 +740,7 @@ export function App() {
 
   operations.current = {
     openProject: () => void openProject(),
+    newWindow,
     save: () => {
       const tab = tabsRef.current.find(
         (item) => item.path === activeRef.current,
@@ -422,14 +754,44 @@ export function App() {
       if (tab) void closeTabs([tab]);
     },
     palette: showPalette,
+    autoSave: autoSaveAll,
+    filesChanged,
   };
+
+  // 切换标签时自动保存离开的文件。
+  const previousActive = useRef<string | null>(null);
+  useEffect(() => {
+    const left = previousActive.current;
+    previousActive.current = active;
+    if (!left || left === active || !autoSaveRef.current) return;
+    const tab = tabsRef.current.find((item) => item.path === left);
+    if (tab && isDirty(tab) && !tab.paused) void saveTab(tab, true);
+  }, [active]);
+
+  // 关闭自动保存时取消等待中的保存；窗口卸载时清理计时器。
+  useEffect(() => {
+    autoSaveRef.current = autoSave;
+    if (!autoSave && autoSaveTimer.current !== null) {
+      window.clearTimeout(autoSaveTimer.current);
+      autoSaveTimer.current = null;
+    }
+    if (autoSave) autoSaveAll();
+  }, [autoSave]);
+  useEffect(
+    () => () => {
+      if (autoSaveTimer.current !== null)
+        window.clearTimeout(autoSaveTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       if (event.isComposing || !(mac ? event.metaKey : event.ctrlKey)) return;
       const key = event.key.toLowerCase();
       if (promptRef.current) {
-        if (['s', 'w', 'o', 'p', 'b'].includes(key)) event.preventDefault();
+        if (['s', 'w', 'o', 'p', 'b', 'n'].includes(key))
+          event.preventDefault();
         return;
       }
       if (key === 's') {
@@ -443,6 +805,9 @@ export function App() {
       } else if (key === 'o') {
         event.preventDefault();
         operations.current.openProject();
+      } else if (key === 'n' && event.shiftKey) {
+        event.preventDefault();
+        operations.current.newWindow();
       } else if (key === 'w') {
         event.preventDefault();
         operations.current.close();
@@ -486,6 +851,8 @@ export function App() {
         try {
           if (await mayDiscard(tabsRef.current))
             await getCurrentWindow().destroy();
+          // 用户返回编辑时退出流程中止，已关闭的窗口不再计入下次恢复。
+          else await backend.cancelQuit();
         } catch (error) {
           notify(errorMessage(error));
         } finally {
@@ -500,6 +867,16 @@ export function App() {
         requestClose();
       }),
       listen('nib://request-close', requestClose),
+      // 后台只把本窗口项目的文件变化发给本窗口。
+      getCurrentWebviewWindow().listen<FileChanges>(
+        'nib://files-changed',
+        ({ payload }) => operations.current.filesChanged(payload),
+      ),
+      // 其他窗口可能更新了最近项目，窗口获得焦点时重新读取；失去焦点时自动保存，与 GoLand 一致。
+      getCurrentWindow().onFocusChanged(({ payload }) => {
+        if (payload) refreshRecent();
+        else operations.current.autoSave();
+      }),
     ]) {
       void subscription
         .then((stop) => {
@@ -514,10 +891,38 @@ export function App() {
     };
   }, []);
 
+  // 窗口加载后打开创建时指定的项目，开发环境重复执行副作用时只打开一次。
+  useEffect(() => {
+    if (!desktop || started.current) return;
+    started.current = true;
+    refreshRecent();
+    void (async () => {
+      busyRef.current = true;
+      setBusy('打开项目');
+      try {
+        const root = await backend.windowStartup();
+        if (root) await loadProject(root);
+      } catch (error) {
+        notify(errorMessage(error));
+        refreshRecent();
+      } finally {
+        busyRef.current = false;
+        setBusy(null);
+      }
+    })();
+  }, []);
+
+  // 标签增减或切换后记录当前项目的标签，编辑内容变化不触发写入。
+  const tabKey = tabs.map((tab) => tab.path).join('\n');
+  useEffect(() => {
+    persistTabs();
+  }, [project?.id, tabKey, active]);
+
   useEffect(() => {
     if (palette) paletteRef.current?.focus();
-    if (!palette && !settings && !prompt) viewRef.current?.focus();
-  }, [palette, settings, prompt]);
+    if (!palette && !settings && !prompt && !projectMenu)
+      viewRef.current?.focus();
+  }, [palette, settings, prompt, projectMenu]);
 
   const selection = selected?.state.selection.main;
   const line =
@@ -543,13 +948,18 @@ export function App() {
         <span className="toolbar-divider" />
         <button
           className="workspace-button"
-          onClick={() => void openProject()}
-          disabled={!desktop || Boolean(busy)}
-          title={`打开文件夹 (${mod}+O)`}
+          onClick={() => {
+            refreshRecent();
+            setProjectMenu((value) => !value);
+          }}
+          disabled={!desktop}
+          title={project ? project.root : '项目'}
+          aria-haspopup="dialog"
+          aria-expanded={projectMenu}
         >
           <FolderOpen size={14} />
           <span>{project?.name ?? '打开项目'}</span>
-          <ChevronRight size={12} />
+          <ChevronDown size={12} />
         </button>
         <div className="toolbar-center">
           <button className="command-trigger" onClick={showPalette}>
@@ -599,6 +1009,7 @@ export function App() {
                   key={project.id}
                   project={project}
                   selected={active}
+                  changes={treeChanges}
                   onOpen={(path) => void openFile(path)}
                 />
               ) : (
@@ -691,7 +1102,12 @@ export function App() {
                     <FileCode2 size={13} />
                     <span>{baseName(tab.path)}</span>
                     {isDirty(tab) && (
-                      <span className="dirty-dot" aria-label="未保存" />
+                      <span
+                        className={`dirty-dot ${tab.paused ? 'paused' : ''}`}
+                        aria-label={
+                          tab.paused ? '未保存，自动保存已暂停' : '未保存'
+                        }
+                      />
                     )}
                   </button>
                   <button
@@ -741,7 +1157,11 @@ export function App() {
                 </span>
               ))}
               {isDirty(selected) && (
-                <span className="unsaved-label">未保存到磁盘</span>
+                <span className="unsaved-label">
+                  {selected.paused
+                    ? '自动保存已暂停 · 外部已修改或保存失败'
+                    : '未保存到磁盘'}
+                </span>
               )}
             </div>
           )}
@@ -777,13 +1197,25 @@ export function App() {
                     disabled={!desktop || Boolean(busy)}
                   >
                     <FolderOpen size={15} />{' '}
-                    {project ? '切换项目文件夹' : '打开文件夹'}
+                    {project ? '在新标签打开文件夹' : '打开文件夹'}
                     <ArrowRight size={15} />
                   </button>
                   {project && (
                     <p className="project-hint">
                       从左侧文件树选择文件开始编辑。
                     </p>
+                  )}
+                  {desktop && !project && (
+                    <div className="welcome-recent">
+                      <p className="menu-label">最近项目</p>
+                      <RecentList
+                        items={recent}
+                        current={null}
+                        disabled={Boolean(busy)}
+                        onOpen={(root) => void openRecent(root)}
+                        onForget={(root) => void forgetProject(root)}
+                      />
+                    </div>
                   )}
                   {!desktop && (
                     <p className="browser-hint">
@@ -952,6 +1384,14 @@ export function App() {
               onChange={(event) => setWrap(event.target.checked)}
             />
           </label>
+          <label>
+            自动保存{' '}
+            <input
+              type="checkbox"
+              checked={autoSave}
+              onChange={(event) => setAutoSave(event.target.checked)}
+            />
+          </label>
           <p>当前会话生效 · {mod} + / − 调整字号</p>
         </div>
       )}
@@ -1049,6 +1489,22 @@ export function App() {
             </footer>
           </section>
         </div>
+      )}
+
+      {projectMenu && (
+        <ProjectMenu
+          project={project}
+          recent={recent}
+          disabled={Boolean(busy)}
+          mod={mod}
+          onChoose={() => void openProject()}
+          onNewWindow={newWindow}
+          onCloseProject={() => void closeProject()}
+          onOpen={(root) => void openRecent(root)}
+          onOpenHere={(root) => void openRecent(root, true)}
+          onForget={(root) => void forgetProject(root)}
+          onClose={() => setProjectMenu(false)}
+        />
       )}
 
       {prompt && <UnsavedDialog paths={prompt.paths} onDecide={decide} />}

@@ -1,10 +1,39 @@
-use tauri::State;
+use std::{path::Path, sync::Arc};
+
+use serde::Serialize;
+use tauri::{AppHandle, State, WebviewWindow};
 
 use crate::{
     error::{AppError, AppResult},
     filesystem::{self, Directory, Document},
-    workspace::{self, Project, WorkspaceState},
+    session::{ProjectTabs, SessionStore},
+    watcher::Watchers,
+    window,
+    workspace::{self, Project, Workspaces},
 };
+
+/// 在当前窗口打开项目的结果。
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum OpenResult {
+    /// 已在当前窗口打开，附带上次的标签；会话记录写入失败时附带说明。
+    Opened {
+        project: Project,
+        tabs: ProjectTabs,
+        warning: Option<String>,
+    },
+    /// 项目已在其他窗口打开，已切换到该窗口。
+    Focused,
+}
+
+/// 最近项目及其目录当前是否仍可访问。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentEntry {
+    pub root: String,
+    pub name: String,
+    pub available: bool,
+}
 
 /// 磁盘任务统一进入阻塞线程池，避免阻塞窗口事件循环。
 async fn blocking<T: Send + 'static>(
@@ -16,44 +45,216 @@ async fn blocking<T: Send + 'static>(
 }
 
 #[tauri::command]
-/// 在后台校验目录可读性，成功后切换当前工作区。
-pub async fn open_project(state: State<'_, WorkspaceState>, path: String) -> AppResult<Project> {
-    let state = state.inner().clone();
-    blocking(move || workspace::open(&state, &path)).await
+/// 返回窗口创建时指定的项目；页面重新加载时返回窗口当前项目。
+pub async fn window_startup(
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
+) -> AppResult<Option<String>> {
+    let workspaces = workspaces.inner().clone();
+    let label = window.label().to_owned();
+    blocking(move || workspaces.startup(&label)).await
+}
+
+#[tauri::command]
+/// 在当前窗口打开项目；项目已在其他窗口打开时切换到该窗口。
+pub async fn open_project(
+    app: AppHandle,
+    workspaces: State<'_, Workspaces>,
+    sessions: State<'_, Arc<SessionStore>>,
+    watchers: State<'_, Watchers>,
+    window: WebviewWindow,
+    path: String,
+) -> AppResult<OpenResult> {
+    let workspaces = workspaces.inner().clone();
+    let sessions = sessions.inner().clone();
+    let watchers = watchers.inner().clone();
+    let label = window.label().to_owned();
+    let handle = app.clone();
+    let (result, other) = blocking(move || {
+        let (root, root_text) = workspace::canonical_root(&path)?;
+        if let Some(other) = workspaces.find(&root)?.filter(|other| *other != label) {
+            return Ok((OpenResult::Focused, Some(other)));
+        }
+        let state = workspaces.get(&label)?;
+        let previous = state.lock()?.current_root();
+        let project = workspace::open(&state, root.clone(), root_text)?;
+        // 项目已切换，会话记录与监听失败只影响恢复和实时刷新，不回滚打开操作。
+        let mut warnings = Vec::new();
+        if let Some(Err(error)) = previous
+            .filter(|previous| *previous != project.root)
+            .map(|previous| sessions.closed(&previous))
+        {
+            warnings.push(format!("最近项目记录保存失败：{}", error.message));
+        }
+        if let Err(error) = sessions.opened(&project.root, &project.name) {
+            warnings.push(format!("最近项目记录保存失败：{}", error.message));
+        }
+        watchers.stop(&label);
+        if let Err(error) = watchers.watch(&handle, &label, project.id, &root) {
+            warnings.push(format!("{}外部修改不会自动刷新。", error.message));
+        }
+        let tabs = sessions.tabs(&project.root)?;
+        Ok((
+            OpenResult::Opened {
+                project,
+                tabs,
+                warning: (!warnings.is_empty()).then(|| warnings.join(" ")),
+            },
+            None,
+        ))
+    })
+    .await?;
+    if let Some(other) = other {
+        window::focus(&app, &other)?;
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+/// 在新窗口打开项目；项目已打开时切换到对应窗口。
+pub async fn open_project_window(
+    app: AppHandle,
+    workspaces: State<'_, Workspaces>,
+    path: String,
+) -> AppResult<()> {
+    let registry = workspaces.inner().clone();
+    let (existing, root) = blocking(move || {
+        let (root, root_text) = workspace::canonical_root(&path)?;
+        Ok((registry.find(&root)?, root_text))
+    })
+    .await?;
+    match existing {
+        Some(label) => window::focus(&app, &label),
+        None => window::create(&app, Some(root)),
+    }
+}
+
+#[tauri::command]
+/// 打开一个未加载项目的新窗口。
+pub async fn new_window(app: AppHandle) -> AppResult<()> {
+    window::create(&app, None)
+}
+
+#[tauri::command]
+/// 关闭当前窗口的项目，下次启动不再恢复。
+pub async fn close_project(
+    workspaces: State<'_, Workspaces>,
+    sessions: State<'_, Arc<SessionStore>>,
+    watchers: State<'_, Watchers>,
+    window: WebviewWindow,
+) -> AppResult<()> {
+    let workspaces = workspaces.inner().clone();
+    let sessions = sessions.inner().clone();
+    let watchers = watchers.inner().clone();
+    let label = window.label().to_owned();
+    blocking(move || {
+        watchers.stop(&label);
+        let state = workspaces.get(&label)?;
+        match workspace::close(&state)? {
+            Some(root) => sessions.closed(&root),
+            None => Ok(()),
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+/// 返回最近项目，并检查各项目目录是否仍然存在。
+pub async fn recent_projects(
+    sessions: State<'_, Arc<SessionStore>>,
+) -> AppResult<Vec<RecentEntry>> {
+    let sessions = sessions.inner().clone();
+    blocking(move || {
+        Ok(sessions
+            .recent()?
+            .into_iter()
+            .map(|item| RecentEntry {
+                available: Path::new(&item.root).is_dir(),
+                root: item.root,
+                name: item.name,
+            })
+            .collect())
+    })
+    .await
+}
+
+#[tauri::command]
+/// 从最近项目中移除，不删除任何项目文件。
+pub async fn forget_project(sessions: State<'_, Arc<SessionStore>>, root: String) -> AppResult<()> {
+    let sessions = sessions.inner().clone();
+    blocking(move || sessions.forget(&root)).await
+}
+
+#[tauri::command]
+/// 记录当前项目打开的标签，供下次打开项目时恢复。
+pub async fn save_tabs(
+    workspaces: State<'_, Workspaces>,
+    sessions: State<'_, Arc<SessionStore>>,
+    window: WebviewWindow,
+    project_id: u64,
+    tabs: Vec<String>,
+    active: Option<String>,
+) -> AppResult<()> {
+    let workspaces = workspaces.inner().clone();
+    let sessions = sessions.inner().clone();
+    let label = window.label().to_owned();
+    blocking(move || {
+        let root = workspaces.get(&label)?.lock()?.root_text(project_id)?;
+        sessions.save_tabs(&root, ProjectTabs { tabs, active })
+    })
+    .await
+}
+
+#[tauri::command]
+/// 用户取消退出后恢复正常关闭语义，并按仍打开的窗口校正恢复列表。
+pub async fn cancel_quit(
+    workspaces: State<'_, Workspaces>,
+    sessions: State<'_, Arc<SessionStore>>,
+) -> AppResult<()> {
+    let workspaces = workspaces.inner().clone();
+    let sessions = sessions.inner().clone();
+    blocking(move || {
+        sessions.set_quitting(false);
+        sessions.retain_open(&workspaces.roots()?)
+    })
+    .await
 }
 
 #[tauri::command]
 /// 只枚举指定层级，避免打开项目时扫描整棵目录树。
 pub async fn list_directory(
-    state: State<'_, WorkspaceState>,
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
     project_id: u64,
     path: String,
 ) -> AppResult<Directory> {
-    let state = state.inner().clone();
+    let state = workspaces.get(window.label())?;
     blocking(move || filesystem::list(&state, project_id, &path)).await
 }
 
 #[tauri::command]
 /// 校验工作区和文件类型后返回文本及磁盘版本。
 pub async fn read_file(
-    state: State<'_, WorkspaceState>,
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
     project_id: u64,
     path: String,
 ) -> AppResult<Document> {
-    let state = state.inner().clone();
+    let state = workspaces.get(window.label())?;
     blocking(move || filesystem::read(&state, project_id, &path)).await
 }
 
 #[tauri::command]
 /// 按读取时的磁盘版本保存，冲突时保留原文件。
 pub async fn save_file(
-    state: State<'_, WorkspaceState>,
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
     project_id: u64,
     path: String,
     content: String,
     expected_revision: String,
 ) -> AppResult<String> {
-    let state = state.inner().clone();
+    let state = workspaces.get(window.label())?;
     blocking(move || filesystem::save(&state, project_id, &path, &content, &expected_revision))
         .await
 }

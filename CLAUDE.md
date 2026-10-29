@@ -59,7 +59,8 @@ npm run desktop:build -- --bundles app
 
 ### 项目与文件树
 
-- 通过系统目录选择器打开真实本地项目，一个窗口管理一个项目。
+- 通过系统目录选择器打开真实本地项目，每个项目一个原生窗口；macOS 上并入同一窗口的原生标签组，顶部标签切换项目；同一项目重复打开时切换到已有标签。
+- 最近项目（欢迎页和工具栏项目菜单）；启动时恢复上次打开的项目窗口及各项目标签，记录存放在 `~/.nib/session.json`（阶段三提前交付，见 `docs/architecture.md`）。
 - 文件树按展开层级加载、目录优先排序、折叠和手动刷新已展开目录。
 - 侧边栏显示/隐藏和宽度调整，当前会话生效。
 - 切换项目后通过工作区 id 和前端检查拒绝或丢弃旧请求。
@@ -73,7 +74,7 @@ npm run desktop:build -- --bundles app
 - 撤销/重做、当前文件查找/替换、行号、当前行高亮、括号匹配、缩进。
 - Go、Rust、JavaScript/JSX、TypeScript/TSX、JSON、Markdown、YAML 高亮按需加载。
 - 深色主题、会话内字号和自动换行、基础编辑命令面板、行列/语言/编码/换行状态栏。
-- Cmd/Ctrl+O、S、Shift+S、W、B、Shift+P、F 等快捷键；完整列表见 README。
+- Cmd/Ctrl+O、Shift+N、S、Shift+S、W、B、Shift+P、F 等快捷键；完整列表见 README。
 
 ### 文件读写保护
 
@@ -87,23 +88,27 @@ npm run desktop:build -- --bundles app
 
 ## 5. 当前代码入口
 
-| 文件或目录                            | 职责                                                     |
-| ------------------------------------- | -------------------------------------------------------- |
-| `src/app/App.tsx`                     | 工作区、标签、保存流程、确认弹窗、快捷键、命令面板、布局 |
-| `src/features/editor/Editor.tsx`      | 单一 CodeMirror 视图、标签状态切换、编辑锁定             |
-| `src/features/editor/model.ts`        | 标签状态、语言加载、主题、未保存判定、换行序列化         |
-| `src/features/explorer/Explorer.tsx`  | 文件树层级加载、展开与刷新                               |
-| `src/lib/backend.ts`                  | Tauri IPC 类型与命令调用                                 |
-| `src/styles/global.css`               | 主题变量和界面样式                                       |
-| `src-tauri/src/lib.rs`                | Tauri 注册、工作区状态、退出确认事件                     |
-| `src-tauri/src/commands/mod.rs`       | 命令边界、阻塞任务调度                                   |
-| `src-tauri/src/workspace/mod.rs`      | 项目根目录、工作区 id、相对路径校验                      |
-| `src-tauri/src/filesystem/mod.rs`     | 目录枚举、文本读取、版本检查与安全保存                   |
-| `src-tauri/src/error.rs`              | 结构化错误码与中文说明                                   |
-| `src-tauri/tauri.conf.json`           | 窗口、构建、打包及 CSP                                   |
-| `src-tauri/capabilities/default.json` | 目录选择与窗口能力权限                                   |
+| 文件或目录                              | 职责                                                     |
+| --------------------------------------- | -------------------------------------------------------- |
+| `src/app/App.tsx`                       | 工作区、标签、保存流程、确认弹窗、快捷键、命令面板、布局 |
+| `src/features/editor/Editor.tsx`        | 单一 CodeMirror 视图、标签状态切换、编辑锁定             |
+| `src/features/editor/model.ts`          | 标签状态、语言加载、主题、未保存判定、换行序列化         |
+| `src/features/explorer/Explorer.tsx`    | 文件树层级加载、展开与刷新                               |
+| `src/features/projects/ProjectMenu.tsx` | 最近项目列表与工具栏项目菜单                             |
+| `src/lib/backend.ts`                    | Tauri IPC 类型与命令调用                                 |
+| `src/styles/global.css`                 | 主题变量和界面样式                                       |
+| `src-tauri/src/lib.rs`                  | Tauri 注册、启动恢复窗口、窗口销毁、退出确认事件         |
+| `src-tauri/src/window/mod.rs`           | 项目窗口创建、聚焦与销毁清理                             |
+| `src-tauri/src/session/mod.rs`          | 最近项目、打开的项目、各项目标签的持久化                 |
+| `src-tauri/src/watcher/mod.rs`          | 项目目录监听、事件合并，并推送给对应窗口                 |
+| `src-tauri/src/commands/mod.rs`         | 命令边界、阻塞任务调度                                   |
+| `src-tauri/src/workspace/mod.rs`        | 按窗口的工作区注册表、项目根目录、工作区 id、路径校验    |
+| `src-tauri/src/filesystem/mod.rs`       | 目录枚举、文本读取、版本检查与安全保存                   |
+| `src-tauri/src/error.rs`                | 结构化错误码与中文说明                                   |
+| `src-tauri/tauri.conf.json`             | 窗口、构建、打包及 CSP                                   |
+| `src-tauri/capabilities/default.json`   | 目录选择与窗口能力权限                                   |
 
-当前自定义命令：`open_project`、`list_directory`、`read_file`、`save_file`。当前尚无 Git 后台或 Git 界面。
+当前自定义命令：`window_startup`、`open_project`、`open_project_window`、`new_window`、`close_project`、`recent_projects`、`forget_project`、`save_tabs`、`cancel_quit`、`list_directory`、`read_file`、`save_file`。当前尚无 Git 后台或 Git 界面。
 
 ## 6. 已执行的验证及边界
 
@@ -117,9 +122,9 @@ npm run desktop:build -- --bundles app
 
 ## 7. 当前限制与需保留的保护
 
-- 尚无文件新建、重命名、删除、废纸篓操作，也没有最近项目。
-- 无文件监听；目录需手动刷新，已打开干净文件不会自动重载，外部修改在保存时检测。
-- 设置、窗口/侧边栏尺寸、已打开文件均未持久化。
+- 尚无文件新建、重命名、删除、废纸篓操作。
+- 项目目录实时监听（`src-tauri/src/watcher`），文件树与已打开标签自动刷新；自动保存默认开启，开关只在本次运行生效。冲突时暂停该文件自动保存，尚无对比合并界面。
+- 设置、窗口/侧边栏尺寸未持久化；已打开文件只恢复标签，不含未保存内容。
 - 尚无未保存内容的崩溃恢复；正常关闭确认不能覆盖强制结束、崩溃和开发热重载。
 - 文件最大 5 MiB；超过 1,048,576 个 JavaScript 字符时禁用语法解析（这是当前实现阈值，不是精确字节阈值）。
 - 最多 30 个打开/正在打开的标签，单目录最多展示 10,000 项，尚未做列表虚拟化。
@@ -160,12 +165,12 @@ Git 实现约束：
 - Cmd/Ctrl+P 文件快速打开；Cmd/Ctrl+Shift+F 项目搜索，按文件分组、可取消、限制结果数、排除 `.git` 且默认尊重 `.gitignore`。
 - 扩展命令面板，提供已实现操作。
 - 字体、字号、缩进、自动换行设置；带版本号的本地配置，经 Rust 统一读写。
-- 最近项目、窗口/侧边栏尺寸和已打开文件恢复；未保存内容的本地恢复，配置与恢复数据和项目文件分开存储。
+- 窗口/侧边栏尺寸恢复；未保存内容的本地恢复，配置与恢复数据和项目文件分开存储。
 - 文件/目录新建、重命名、删除优先移入系统废纸篓。
 
 ### 阶段四：稳定性和性能
 
-- 项目范围监听与事件合并；区分干净文件和未保存文件的外部变化处理。
+- 外部修改与未保存编辑冲突时的对比/合并界面；大仓库下监听性能测量（监听、事件合并和干净/未保存文件区分处理已提前实现）。
 - 后台取消/超时/并发控制，大文件/仓库/Diff 降级，长列表虚拟化。
 - 测量冷启动、已加载标签切换、输入滚动与空闲活动。记录机器和项目规模，不承诺未经测量的内存值。
 - 分别测量空窗口、项目、多文件、大 Diff 时应用及 WebView 总内存，排查增长。

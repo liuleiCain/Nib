@@ -1,18 +1,63 @@
 mod commands;
 mod error;
 mod filesystem;
+mod session;
+mod watcher;
+mod window;
 mod workspace;
+
+use std::sync::Arc;
 
 use tauri::{Emitter, Manager};
 
+use session::SessionStore;
+use watcher::Watchers;
+use workspace::Workspaces;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-/// 注册工作区命令，并让正常退出先经过未保存内容确认。
+/// 注册工作区命令，恢复上次打开的项目窗口，并让正常退出先经过未保存内容确认。
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(workspace::WorkspaceState::default())
+        .manage(Workspaces::default())
+        .manage(Watchers::default())
+        .setup(|app| {
+            // 会话数据放在用户目录的 .nib 下，删除该目录即清空所有记录。
+            let sessions = Arc::new(SessionStore::load(app.path().home_dir()?.join(".nib")));
+            app.manage(sessions.clone());
+            // 只恢复目录仍可访问的项目，其余从下次恢复列表中移除。
+            let mut roots: Vec<String> = Vec::new();
+            for root in sessions.open_projects() {
+                if let Ok((_, text)) = workspace::canonical_root(&root) {
+                    if !roots.contains(&text) {
+                        roots.push(text);
+                    }
+                }
+            }
+            // 单个项目窗口创建失败时跳过；全部失败或没有可恢复项目时打开空窗口。
+            roots.retain(|root| window::create(app.handle(), Some(root.clone())).is_ok());
+            // 恢复列表写入失败不影响本次启动。
+            let _ = sessions.retain_open(&roots);
+            if roots.is_empty() {
+                window::create(app.handle(), None).map_err(|error| error.message)?;
+            }
+            Ok(())
+        })
+        .on_window_event(|target, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                window::destroyed(target.app_handle(), target.label());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
+            commands::window_startup,
             commands::open_project,
+            commands::open_project_window,
+            commands::new_window,
+            commands::close_project,
+            commands::recent_projects,
+            commands::forget_project,
+            commands::save_tabs,
+            commands::cancel_quit,
             commands::list_directory,
             commands::read_file,
             commands::save_file,
@@ -20,10 +65,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("Nib 启动失败")
         .run(|app, event| {
-            // 菜单退出与 Cmd+Q 也走前端未保存确认；窗口销毁后才允许退出。
+            // 菜单退出与 Cmd+Q 也走各窗口的未保存确认；窗口全部销毁后才允许退出。
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                if app.get_webview_window("main").is_some() {
+                if !app.webview_windows().is_empty() {
                     api.prevent_exit();
+                    app.state::<Arc<SessionStore>>().set_quitting(true);
                     let _ = app.emit("nib://request-close", ());
                 }
             }

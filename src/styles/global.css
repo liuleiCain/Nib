@@ -434,6 +434,9 @@ kbd {
   background: #c9ba8e;
   border-radius: 50%;
 }
+.dirty-dot.paused {
+  background: #d08770;
+}
 .tab-placeholder {
   color: #5b6871;
   font-size: 11px;
@@ -720,6 +723,116 @@ h1 span {
   border-radius: 5px;
   padding: 14px;
   box-shadow: 0 10px 30px #0003;
+}
+.menu-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+}
+.project-menu {
+  left: 112px;
+  right: auto;
+  width: 330px;
+  padding: 6px;
+}
+.menu-actions {
+  padding-bottom: 6px;
+  border-bottom: 1px solid #ffffff0a;
+}
+.menu-actions > button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 9px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #b2c0b9;
+  text-align: left;
+}
+.menu-actions > button span {
+  flex: 1;
+}
+.menu-actions > button:hover:not(:disabled) {
+  background: #8db29b19;
+}
+.menu-label {
+  margin: 10px 9px 6px;
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--faint);
+}
+.menu-hint {
+  margin: 6px 9px 4px;
+  font-size: 9px;
+  color: #6d7b81;
+}
+.recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: min(300px, calc(100dvh - 260px));
+  overflow: auto;
+}
+.recent-list li {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 4px;
+}
+.recent-list li:hover {
+  background: #ffffff06;
+}
+.recent-list li > .icon-button {
+  opacity: 0;
+}
+.recent-list li:hover > .icon-button,
+.recent-list li:focus-within > .icon-button {
+  opacity: 1;
+}
+.recent-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  text-align: left;
+  color: var(--accent);
+}
+.recent-open > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.recent-open strong,
+.recent-open small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recent-open strong {
+  font-size: 12px;
+  font-weight: 500;
+  color: #c3cfca;
+}
+.recent-open small {
+  font-size: 10px;
+  color: var(--faint);
+}
+.recent-list li.unavailable .recent-open:disabled {
+  opacity: 0.55;
+}
+.recent-empty {
+  margin: 4px 9px 8px;
+  font-size: 11px;
+  color: var(--faint);
+}
+.welcome-recent {
+  margin-top: 28px;
+  width: 330px;
+  margin-left: -9px;
 }
 .popover-title {
   display: flex;

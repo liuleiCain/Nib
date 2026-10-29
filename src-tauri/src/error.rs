@@ -18,6 +18,12 @@ impl AppError {
     }
 }
 
+impl From<tauri::Error> for AppError {
+    fn from(error: tauri::Error) -> Self {
+        Self::new("WINDOW", format!("窗口操作失败：{error}"))
+    }
+}
+
 impl From<std::io::Error> for AppError {
     fn from(error: std::io::Error) -> Self {
         Self::new("IO", format!("文件操作失败：{error}"))

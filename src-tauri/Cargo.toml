@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Nib 轻量代码编辑器"
 authors = ["Nib contributors"]
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.85"
 
 [lib]
 name = "nib_lib"
@@ -17,8 +17,14 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sha2 = "0.10"
 tempfile = "3"
+notify = "8.2.1"
+
+# macOS 原生窗口标签；与 Tauri 依赖的版本一致，不引入新包。
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSWindow", "NSGraphics"] }
 
 [profile.release]
 panic = "abort"

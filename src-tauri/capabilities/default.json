@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "main-window",
-  "description": "主窗口仅使用目录选择、窗口标题和受控关闭能力；项目读写由 Rust 校验。",
-  "windows": ["main"],
+  "identifier": "project-window",
+  "description": "项目窗口仅使用目录选择、窗口标题和受控关闭能力；项目读写由 Rust 校验。",
+  "windows": ["window-*"],
   "permissions": [
     "core:default",
     "core:window:allow-set-title",
