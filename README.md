@@ -6,7 +6,7 @@
 
 ## 环境要求
 
-- Node.js 22.12+（推荐当前 LTS）或 24+；pnpm 11。
+- Node.js 22.12+（推荐当前 LTS）或 24+；使用 Node 自带的 npm。
 - Rust stable，通过 [rustup](https://rustup.rs/) 安装；确保 `cargo` 位于 `PATH`。
 - macOS：Xcode Command Line Tools（`xcode-select --install`）。
 - Windows：MSVC Rust 工具链、Visual Studio C++ Build Tools、WebView2。
@@ -16,8 +16,8 @@
 ## 安装与启动
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm desktop
+npm ci
+npm run desktop
 ```
 
 如果刚安装 Rust 且当前终端尚未更新 `PATH`，先运行：
@@ -26,20 +26,20 @@ pnpm desktop
 source "$HOME/.cargo/env"
 ```
 
-`pnpm desktop` 会启动 Vite 并打开原生 Tauri 窗口。点击「打开文件夹」，展开文件树，选择真实文本文件开始编辑。
+`npm run desktop` 会启动 Vite 并打开原生 Tauri 窗口。点击「打开文件夹」，展开文件树，选择真实文本文件开始编辑。
 
 ```sh
-pnpm dev             # 仅浏览器预览；不具备本地项目访问能力
-pnpm typecheck       # TypeScript 检查
-pnpm format:check    # 前端、配置与文档格式检查
-pnpm build           # 前端类型检查与生产构建
+npm run dev             # 仅浏览器预览；不具备本地项目访问能力
+npm run typecheck       # TypeScript 检查
+npm run format:check    # 前端、配置与文档格式检查
+npm run build           # 前端类型检查与生产构建
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-pnpm desktop:build --bundles app       # macOS .app
-pnpm desktop:build                    # macOS .app 和 .dmg
+npm run desktop:build -- --bundles app   # macOS .app
+npm run desktop:build                    # macOS .app 和 .dmg
 ```
 
-macOS 产物位于 `src-tauri/target/release/bundle/`。本地构建默认没有开发者签名或公证；正式分发需另行配置。Windows、Linux 应在对应系统安装依赖后执行 `pnpm desktop:build --bundles nsis` 或 `--bundles deb`；默认打包目标为 macOS，不能将本机验证视为跨平台验证。
+macOS 产物位于 `src-tauri/target/release/bundle/`。本地构建默认没有开发者签名或公证；正式分发需另行配置。Windows、Linux 应在对应系统安装依赖后执行 `npm run desktop:build -- --bundles nsis` 或 `-- --bundles deb`；默认打包目标为 macOS，不能将本机验证视为跨平台验证。
 
 ## 阶段一功能
 

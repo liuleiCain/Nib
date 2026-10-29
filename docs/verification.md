@@ -15,6 +15,8 @@
 
 依赖由 `pnpm-lock.yaml` 和 `src-tauri/Cargo.lock` 固定。Tauri 前端 API、CLI 与 Rust 依赖均为 2.x，桌面构建通过了 Tauri 包版本兼容性检查。
 
+阶段一验证后，前端包管理改为 npm（11.10.1），锁文件改为 `package-lock.json`。npm 解析出的 96 个包与原 `pnpm-lock.yaml` 的名称和版本逐一一致。以下命令为阶段一实际执行记录，现对应 `npm run <脚本名>`。
+
 ## 构建与静态检查
 
 以下命令均通过：

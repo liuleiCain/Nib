@@ -25,7 +25,7 @@
 | UI 基础组件 | 按需使用 Radix UI / shadcn/ui    |
 | 图标        | Lucide                           |
 | Git 集成    | 调用本机 Git CLI                 |
-| 包管理      | pnpm                             |
+| 包管理      | npm                              |
 | 配置存储    | 本地配置文件，通过 Rust 统一读写 |
 
 补充约束：

@@ -8,7 +8,7 @@ Nib（笔尖）是一款轻量的**桌面代码编辑器**，核心是基础编�
 
 当前已建立项目并完成阶段一的编辑器骨架，下一步按阶段二实现 Git 核心闭环。请在现有实现上继续，不要重新初始化或替换技术栈。阶段一真实中文输入法组合输入仍待人工验收。
 
-- 技术栈：Tauri 2、Rust、React、TypeScript、Vite、CodeMirror 6、Lucide、pnpm。
+- 技术栈：Tauri 2、Rust、React、TypeScript、Vite、CodeMirror 6、Lucide、npm。
 - React 管理界面、编辑器和交互状态，Rust 管理本地文件、未来的 Git/搜索/监听/配置。
 - 目前没有状态管理库、数据库、完整组件库、项目索引或插件系统；按需求添加依赖。
 - 以克制的深色界面为基础，文件与 Git 将共用侧边栏，编辑与 Diff 使用主内容区。使用系统窗口能力。
@@ -30,8 +30,8 @@ Nib（笔尖）是一款轻量的**桌面代码编辑器**，核心是基础编�
 在项目根目录执行：
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm desktop
+npm ci
+npm run desktop
 ```
 
 如果 Rust 尚未进入当前终端 PATH：
@@ -40,20 +40,20 @@ pnpm desktop
 source "$HOME/.cargo/env"
 ```
 
-`pnpm desktop` 运行 Tauri 开发窗口，Vite 仅在开发时提供界面资源。`pnpm dev` 是浏览器界面预览，不能完成真实桌面文件功能的验收。打包后的应用直接启动，不需要单独运行 Vite 或网页服务。
+`npm run desktop` 运行 Tauri 开发窗口，Vite 仅在开发时提供界面资源。`npm run dev` 是浏览器界面预览，不能完成真实桌面文件功能的验收。打包后的应用直接启动，不需要单独运行 Vite 或网页服务。
 
 ```sh
-pnpm typecheck
-pnpm format:check
-pnpm build
+npm run typecheck
+npm run format:check
+npm run build
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-pnpm desktop:build --bundles app
+npm run desktop:build -- --bundles app
 ```
 
 本机已生成的 macOS 应用位置：`src-tauri/target/release/bundle/macos/Nib.app`。修改代码后需重新构建，已有 `.app` 不会自动更新。默认打包配置为 macOS app/dmg；Windows/Linux 需要在对应系统检查依赖并选择实际打包目标。
 
-此前验证环境：macOS 27.2 arm64、Node 25.7.0、pnpm 11.25.0、Rust/Cargo 1.99.1、Xcode Command Line Tools。环境要求以 `package.json`、锁文件和平台要求为准。`Cargo.toml` 的 Rust 最低版本声明没有通过最低版本工具链实测。
+此前验证环境：macOS 27.2 arm64、Node 25.7.0、pnpm 11.25.0（阶段一验证时使用，现已改用 npm 11.10.1）、Rust/Cargo 1.99.1、Xcode Command Line Tools。环境要求以 `package.json`、锁文件和平台要求为准。`Cargo.toml` 的 Rust 最低版本声明没有通过最低版本工具链实测。
 
 ## 4. 已完成的阶段一功能
 

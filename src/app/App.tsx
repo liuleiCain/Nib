@@ -538,9 +538,7 @@ export function App() {
       <header className="toolbar">
         <div className="brand">
           <PenLine size={19} strokeWidth={1.7} />
-          <strong>
-            nib<span>.</span>
-          </strong>
+          <strong>Nib</strong>
         </div>
         <span className="toolbar-divider" />
         <button
@@ -789,7 +787,7 @@ export function App() {
                   )}
                   {!desktop && (
                     <p className="browser-hint">
-                      这是浏览器预览。运行 <code>pnpm desktop</code>
+                      这是浏览器预览。运行 <code>npm run desktop</code>
                       <br />
                       即可在桌面窗口中打开和编辑真实文件。
                     </p>
@@ -815,7 +813,7 @@ export function App() {
                     </div>
                   </div>
                 </div>
-                <div className="welcome-watermark">nib.</div>
+                <div className="welcome-watermark">Nib</div>
                 <div className="welcome-footer">
                   <span>为专注而设计</span>
                   <span>本地文件 · 原生窗口 · 轻量编辑</span>
