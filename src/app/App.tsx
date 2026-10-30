@@ -12,6 +12,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import {
   ArrowDownToLine,
   ArrowRight,
+  ArchiveRestore,
   Check,
   ChevronDown,
   ChevronRight,
@@ -50,6 +51,8 @@ import type {
   Project,
   ProjectTabs,
   RecentProject,
+  RecoveryEntry,
+  Settings,
 } from '../lib/backend';
 import { backend, desktop, errorCode, errorMessage } from '../lib/backend';
 import { Editor } from '../features/editor/Editor';
@@ -79,6 +82,9 @@ import { BranchPopup } from '../features/git/BranchPopup';
 import { CommitPanel } from '../features/git/CommitPanel';
 import { LogPanel } from '../features/git/LogPanel';
 import type { DiffTab } from '../features/git/DiffView';
+import type { Reveal } from '../features/editor/Editor';
+import { QuickOpen } from '../features/search/QuickOpen';
+import { SearchPanel } from '../features/search/SearchPanel';
 import { DiffView } from '../features/git/DiffView';
 import { setHeadDoc } from '../features/git/changes';
 import { Text } from '@codemirror/state';
@@ -90,6 +96,7 @@ type Decision = 'save' | 'discard' | 'cancel';
  */
 type PromptKind =
   | 'unsaved'
+  | 'recover'
   | 'restore'
   | 'rollback'
   | 'delete'
@@ -108,9 +115,37 @@ interface Prompt {
   resolve: (decision: Decision) => void;
 }
 
+/** 三选一确认框（save / discard / cancel）的文字。 */
+const promptChoices: Record<
+  'unsaved' | 'recover',
+  {
+    title: string;
+    description: string;
+    save: string;
+    discard: string;
+    cancel: string;
+  }
+> = {
+  unsaved: {
+    title: '保存这次修改？',
+    description: '以下文件的修改尚未保存到磁盘。放弃后将无法恢复。',
+    save: '保存并继续',
+    discard: '放弃修改',
+    cancel: '返回编辑',
+  },
+  recover: {
+    title: '恢复上次未保存的内容？',
+    description:
+      'Nib 上次没有正常关闭，以下文件有未保存的编辑。恢复后作为未保存的修改放回编辑器，可撤销；放弃后无法找回；稍后处理会在下次打开项目时再次提示。',
+    save: '恢复',
+    discard: '放弃',
+    cancel: '稍后处理',
+  },
+};
+
 /** 单一操作确认框的文字。 */
 const confirmations: Record<
-  Exclude<PromptKind, 'unsaved'>,
+  Exclude<PromptKind, 'unsaved' | 'recover'>,
   { title: string; description: string; confirm: string }
 > = {
   restore: {
@@ -191,6 +226,15 @@ const mod = mac ? '⌘' : 'Ctrl';
 const baseName = (path: string) => path.split('/').pop() ?? path;
 /** 停止输入后自动保存的等待时间。 */
 const AUTO_SAVE_DELAY = 1000;
+/** 编辑后写入恢复数据的最长间隔。 */
+const RECOVERY_DELAY = 1500;
+/** 超过该长度（UTF-16 单位）的文件不写恢复数据，保证 UTF-8 编码后不超过后台的 5 MiB 上限。 */
+const MAX_RECOVERY_LENGTH = 1_500_000;
+/** 设置变化后写盘的等待时间，连续调整字号只写一次。 */
+const SETTINGS_DELAY = 300;
+/** 编辑器字体为空时使用的内置字体。 */
+const DEFAULT_EDITOR_FONT =
+  "'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace";
 /** 文件变化后刷新 Git 状态的等待时间；连续写入只刷新一次。 */
 const GIT_REFRESH_DELAY = 400;
 /** Diff 标签的标识前缀，与文件标签共用一个标签栏；文件路径不会含 NUL，不会与文件标签冲突。 */
@@ -219,6 +263,29 @@ export function App() {
   const [sidebarWidth, setSidebarWidth] = useState(248);
   const [wrap, setWrap] = useState(false);
   const [fontSize, setFontSize] = useState(13);
+  const [fontFamily, setFontFamily] = useState('');
+  const [tabSize, setTabSize] = useState(4);
+  // 设置读取完成前不写盘；saved 为最近一次写入或收到的设置，相同时跳过写入。
+  const settingsLoaded = useRef(false);
+  const savedSettings = useRef<Settings | null>(null);
+  const settingsTimer = useRef<number | null>(null);
+  const [fontDraft, setFontDraft] = useState('');
+  const sidebarLoaded = useRef(false);
+  const savedSidebarWidth = useRef(248);
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [searchFocus, setSearchFocus] = useState<{
+    key: number;
+    seed: string | null;
+  }>({ key: 0, seed: null });
+  const [reveal, setReveal] = useState<Reveal | null>(null);
+  const revealKey = useRef(0);
+  // 恢复数据：已写入的文档快照（与当前文档相同时不重复写入）、写入计时器和串行队列。
+  const recorded = useRef(new Map<string, Text>());
+  const recoveryTimer = useRef<number | null>(null);
+  const recoveryQueue = useRef<Promise<void>>(Promise.resolve());
+  // 项目正常关闭后停止写入，避免关闭过程中又写下已放弃的内容。
+  const recoveryClosed = useRef(true);
+  const recoveryFailed = useRef(false);
   const [palette, setPalette] = useState(false);
   const [query, setQuery] = useState('');
   const [commandIndex, setCommandIndex] = useState(0);
@@ -242,7 +309,9 @@ export function App() {
   const viewRef = useRef<EditorView | null>(null);
   const paletteRef = useRef<HTMLInputElement>(null);
   // Git：侧边栏视图、仓库状态、勾选的文件、提交信息与 Diff 标签。
-  const [panel, setPanel] = useState<'files' | 'commit' | 'log'>('files');
+  const [panel, setPanel] = useState<'files' | 'commit' | 'log' | 'search'>(
+    'files',
+  );
   const [git, setGit] = useState<GitStatus | null>(null);
   const gitRef = useRef<GitStatus | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
@@ -307,6 +376,8 @@ export function App() {
     save: () => {},
     close: () => {},
     palette: () => {},
+    quickOpen: () => {},
+    search: () => {},
     autoSave: () => {},
     filesChanged: (_changes: FileChanges) => {},
     commitPanel: () => {},
@@ -2076,6 +2147,10 @@ export function App() {
     const next = result.project;
     desiredFile.current = null;
     restoring.current = false;
+    recorded.current.clear();
+    recoveryFailed.current = false;
+    recoveryClosed.current = false;
+    setQuickOpen(false);
     projectRef.current = next;
     setProject(next);
     resetGit();
@@ -2088,6 +2163,8 @@ export function App() {
     refreshRecent();
     void refreshGit(null);
     await restoreTabs(next, result.tabs);
+    // 不等待用户选择，避免启动流程一直处于忙碌状态。
+    void checkRecovery(next);
   }
 
   /** 已有项目时在新项目标签打开，空标签直接在当前标签打开。 */
@@ -2096,15 +2173,18 @@ export function App() {
     setProjectMenu(false);
     busyRef.current = true;
     setBusy('打开项目');
+    const workspace = projectRef.current;
     try {
       if (projectRef.current && !here) {
         await backend.openProjectWindow(root);
       } else if (await mayDiscard(tabsRef.current)) {
+        await finishRecovery();
         await loadProject(root);
       }
     } catch (error) {
       notify(errorMessage(error));
       refreshRecent();
+      if (workspace) resumeRecovery(workspace);
     } finally {
       busyRef.current = false;
       setBusy(null);
@@ -2130,9 +2210,12 @@ export function App() {
     setProjectMenu(false);
     busyRef.current = true;
     setBusy('关闭项目');
+    const workspace = projectRef.current;
     try {
       if (!(await mayDiscard(tabsRef.current))) return;
+      await finishRecovery();
       await backend.closeProject();
+      setQuickOpen(false);
       desiredFile.current = null;
       restoring.current = false;
       projectRef.current = null;
@@ -2146,6 +2229,7 @@ export function App() {
       refreshRecent();
     } catch (error) {
       notify(errorMessage(error));
+      if (workspace) resumeRecovery(workspace);
     } finally {
       busyRef.current = false;
       setBusy(null);
@@ -2276,14 +2360,273 @@ export function App() {
     }
   }
 
+  /**
+   * 把未保存的标签内容写入恢复数据：有新编辑的写入，已保存、放弃或关闭的删除。
+   * 写入串行执行；项目已正常关闭、确认框打开期间不写入。
+   */
+  function syncRecovery() {
+    recoveryTimer.current = null;
+    const workspace = projectRef.current;
+    if (!desktop || !workspace || recoveryClosed.current) return;
+    const open = new Map(tabsRef.current.map((tab) => [tab.path, tab]));
+    const discard: string[] = [];
+    const save: { path: string; doc: Text; revision: string }[] = [];
+    for (const [path, doc] of recorded.current) {
+      const tab = open.get(path);
+      if (!tab || !isDirty(tab) || tab.state.doc.length > MAX_RECOVERY_LENGTH)
+        discard.push(path);
+      else if (tab.state.doc !== doc)
+        save.push({ path, doc: tab.state.doc, revision: tab.revision });
+    }
+    for (const tab of tabsRef.current)
+      if (
+        isDirty(tab) &&
+        !tab.truncated &&
+        !recorded.current.has(tab.path) &&
+        tab.state.doc.length <= MAX_RECOVERY_LENGTH
+      )
+        save.push({
+          path: tab.path,
+          doc: tab.state.doc,
+          revision: tab.revision,
+        });
+    for (const path of discard) recorded.current.delete(path);
+    for (const item of save) recorded.current.set(item.path, item.doc);
+    if (!discard.length && !save.length) return;
+    recoveryQueue.current = recoveryQueue.current.then(async () => {
+      if (projectRef.current?.id !== workspace.id) return;
+      if (discard.length)
+        await backend.recoveryDiscard(workspace.id, discard).catch(() => {
+          // 删除失败时留着记录，下次同步再删；残留的条目在恢复时会与磁盘内容比较。
+        });
+      for (const item of save) {
+        try {
+          await backend.recoverySave(
+            workspace.id,
+            item.path,
+            item.doc.toString(),
+            item.revision,
+          );
+          recoveryFailed.current = false;
+        } catch (error) {
+          if (projectRef.current?.id !== workspace.id) return;
+          // 下次同步重试；连续失败只提示一次。
+          if (recorded.current.get(item.path) === item.doc)
+            recorded.current.delete(item.path);
+          if (!recoveryFailed.current) {
+            recoveryFailed.current = true;
+            notify(`未保存内容的恢复数据写入失败：${errorMessage(error)}`);
+          }
+        }
+      }
+    });
+  }
+
+  /** 编辑后最多 RECOVERY_DELAY 毫秒写入一次恢复数据，持续输入时不会一直推迟。 */
+  function scheduleRecovery() {
+    if (recoveryTimer.current === null)
+      recoveryTimer.current = window.setTimeout(syncRecovery, RECOVERY_DELAY);
+  }
+
+  /** 项目正常关闭前删除本次写入的恢复数据；用户选择“稍后处理”的条目保留。 */
+  async function finishRecovery() {
+    recoveryClosed.current = true;
+    if (recoveryTimer.current !== null)
+      window.clearTimeout(recoveryTimer.current);
+    recoveryTimer.current = null;
+    const workspace = projectRef.current;
+    await recoveryQueue.current;
+    const paths = [...recorded.current.keys()];
+    recorded.current.clear();
+    if (workspace && paths.length)
+      await backend.recoveryDiscard(workspace.id, paths).catch(() => {});
+  }
+
+  /** 关闭或切换项目失败、仍留在当前项目时，继续写入恢复数据。 */
+  function resumeRecovery(workspace: Project) {
+    if (projectRef.current?.id !== workspace.id) return;
+    recoveryClosed.current = false;
+    syncRecovery();
+  }
+
+  /**
+   * 打开项目后检查上次异常退出留下的未保存内容。与磁盘内容相同的直接删除；
+   * 文件已不存在的保留并说明；其余列出供用户选择恢复、放弃或稍后处理。
+   */
+  async function checkRecovery(workspace: Project, manual = false) {
+    let entries: RecoveryEntry[];
+    try {
+      entries = await backend.recoveryList(workspace.id);
+    } catch (error) {
+      if (projectRef.current?.id === workspace.id)
+        notify(`读取恢复数据失败：${errorMessage(error)}`);
+      return;
+    }
+    if (projectRef.current?.id !== workspace.id) return;
+    const candidates: RecoveryEntry[] = [];
+    const stale: string[] = [];
+    const lost: string[] = [];
+    for (const entry of entries) {
+      // 本次已经写入的条目属于当前编辑，不是上次留下的。
+      if (recorded.current.has(entry.path)) continue;
+      const tab = tabsRef.current.find((item) => item.path === entry.path);
+      if (tab && isDirty(tab)) continue;
+      try {
+        const document = await backend.readFile(workspace.id, entry.path);
+        if (projectRef.current?.id !== workspace.id) return;
+        if (document.truncated) lost.push(entry.path);
+        else if (document.content === entry.content) stale.push(entry.path);
+        else candidates.push(entry);
+      } catch {
+        if (projectRef.current?.id !== workspace.id) return;
+        lost.push(entry.path);
+      }
+    }
+    if (stale.length)
+      await backend.recoveryDiscard(workspace.id, stale).catch(() => {});
+    if (lost.length)
+      notify(
+        `${lost.length} 个文件有上次未保存的内容，但文件已不存在或无法编辑，无法恢复：${lost.map(baseName).join('、')}。内容仍保存在 ~/.nib/recovery 中。`,
+      );
+    if (!candidates.length) {
+      if (manual && !lost.length) notify('没有需要恢复的未保存内容', false);
+      return;
+    }
+    const decision = await ask(
+      candidates.map((entry) => entry.path),
+      'recover',
+    );
+    if (projectRef.current?.id !== workspace.id || decision === 'cancel')
+      return;
+    if (decision === 'discard') {
+      await backend
+        .recoveryDiscard(
+          workspace.id,
+          candidates.map((entry) => entry.path),
+        )
+        .catch((error) => notify(`删除恢复数据失败：${errorMessage(error)}`));
+      return;
+    }
+    const changed: string[] = [];
+    const failed: string[] = [];
+    for (const entry of candidates) {
+      const result = await applyRecovered(workspace, entry);
+      if (projectRef.current?.id !== workspace.id) return;
+      if (result === 'changed') changed.push(baseName(entry.path));
+      else if (result === 'failed') failed.push(baseName(entry.path));
+    }
+    const restored = candidates.length - failed.length;
+    notify(
+      [
+        restored ? `已恢复 ${restored} 个文件的未保存内容` : '',
+        changed.length
+          ? `${changed.join('、')} 在上次编辑后被外部修改，已暂停自动保存，请核对后手动保存`
+          : '',
+        failed.length ? `${failed.join('、')} 无法打开，恢复数据已保留` : '',
+      ]
+        .filter(Boolean)
+        .join('。'),
+      Boolean(changed.length || failed.length),
+    );
+  }
+
+  /**
+   * 把恢复内容作为一次编辑放回标签（可撤销），之后照常按磁盘版本检查保存冲突。
+   * 文件在上次编辑后被外部修改时暂停自动保存，由用户核对。
+   */
+  async function applyRecovered(
+    workspace: Project,
+    entry: RecoveryEntry,
+  ): Promise<'ok' | 'changed' | 'failed'> {
+    let tab = tabsRef.current.find((item) => item.path === entry.path);
+    if (!tab) {
+      if (tabsRef.current.length + pendingFiles.current.size >= 30)
+        return 'failed';
+      try {
+        const created = await createTab(
+          entry.path,
+          await backend.readFile(workspace.id, entry.path),
+        );
+        if (projectRef.current?.id !== workspace.id) return 'failed';
+        tab = tabsRef.current.find((item) => item.path === entry.path);
+        if (!tab) {
+          tab = created;
+          updateTabs([...tabsRef.current, created]);
+          void loadHead(entry.path);
+        }
+      } catch {
+        return 'failed';
+      }
+    }
+    if (tab.truncated) return 'failed';
+    const change = diffChange(tab.state.doc, entry.content);
+    if (change) {
+      const view = viewRef.current;
+      if (view && activeRef.current === tab.path && view.state === tab.state) {
+        view.dispatch({ changes: change });
+        tab.state = view.state;
+      } else tab.state = tab.state.update({ changes: change }).state;
+    }
+    const changed = tab.revision !== entry.revision;
+    if (changed) tab.paused = true;
+    updateTabs(tabsRef.current);
+    if (!activeRef.current) activate(tab.path);
+    return changed ? 'changed' : 'ok';
+  }
+
+  /** 打开文件并定位到 1 起始的行和 UTF-16 列，选中 length 个字符。 */
+  async function openAt(path: string, line: number, column = 0, length = 0) {
+    await openFile(path);
+    if (activeRef.current !== path) return;
+    revealKey.current += 1;
+    setReveal({ path, line, column, length, key: revealKey.current });
+  }
+
+  function showQuickOpen() {
+    if (!projectRef.current || busyRef.current || promptRef.current) return;
+    setPalette(false);
+    setSettings(false);
+    setQuickOpen((value) => !value);
+  }
+
+  /** 打开项目搜索；当前编辑器选中单行文本时用它作为搜索内容。 */
+  function showSearch() {
+    if (!projectRef.current) return;
+    const state = viewRef.current?.state;
+    const range = state?.selection.main;
+    const text =
+      state && range && !range.empty
+        ? state.sliceDoc(range.from, range.to)
+        : '';
+    setSidebar(true);
+    setPanel('search');
+    setSearchFocus((previous) => ({
+      key: previous.key + 1,
+      seed: text && !text.includes('\n') && text.length <= 200 ? text : null,
+    }));
+  }
+
   function showPalette() {
     setQuery('');
     setCommandIndex(0);
     setSettings(false);
+    setQuickOpen(false);
     setPalette(true);
   }
 
   const commands: PaletteCommand[] = [
+    {
+      label: '快速打开文件',
+      detail: `${mod} P`,
+      action: showQuickOpen,
+      disabled: !project,
+    },
+    {
+      label: '在项目中搜索',
+      detail: `${mod} ⇧ F`,
+      action: showSearch,
+      disabled: !project,
+    },
     {
       label: '打开文件夹',
       detail: `${mod} O`,
@@ -2310,6 +2653,23 @@ export function App() {
       detail: '项目',
       action: () => void closeProject(),
       disabled: !project,
+    },
+    {
+      label: '文件',
+      detail: '侧边栏',
+      action: () => {
+        setSidebar(true);
+        setPanel('files');
+      },
+      disabled: !project,
+    },
+    {
+      label: '恢复上次未保存的内容',
+      detail: '恢复',
+      action: () => {
+        if (projectRef.current) void checkRecovery(projectRef.current, true);
+      },
+      disabled: !project || !desktop,
     },
     {
       label: '提交',
@@ -2440,6 +2800,31 @@ export function App() {
       disabled: !selected,
     },
     {
+      label: '复制当前文件的路径',
+      detail: '文件',
+      action: () => {
+        if (selected && project)
+          void copyText(`${project.root}/${selected.path}`, '路径');
+      },
+      disabled: !selected,
+    },
+    {
+      label: '复制当前文件的相对路径',
+      detail: '文件',
+      action: () => {
+        if (selected) void copyText(selected.path, '相对路径');
+      },
+      disabled: !selected,
+    },
+    {
+      label: mac ? '在访达中显示当前文件' : '在文件管理器中显示当前文件',
+      detail: '文件',
+      action: () => {
+        if (selected) revealEntry({ path: selected.path, isDir: false });
+      },
+      disabled: !selected,
+    },
+    {
       label: '关闭当前标签页',
       detail: `${mod} W`,
       action: () => {
@@ -2472,8 +2857,28 @@ export function App() {
       action: () => setWrap((value) => !value),
     },
     {
-      label: '编辑器显示设置',
-      detail: '字体大小 / 换行',
+      label: '增大字号',
+      detail: `${mod} +`,
+      action: () => setFontSize((size) => Math.min(24, size + 1)),
+    },
+    {
+      label: '减小字号',
+      detail: `${mod} −`,
+      action: () => setFontSize((size) => Math.max(10, size - 1)),
+    },
+    {
+      label: '重置字号',
+      detail: `${mod} 0`,
+      action: () => setFontSize(13),
+    },
+    {
+      label: '切换缩进宽度',
+      detail: `当前 ${tabSize}`,
+      action: () => setTabSize((size) => (size === 2 ? 4 : size === 4 ? 8 : 2)),
+    },
+    {
+      label: '设置',
+      detail: '字体 / 字号 / 缩进 / 换行',
       action: () => setSettings(true),
     },
   ];
@@ -2502,6 +2907,8 @@ export function App() {
       if (tab) void closeTabs([tab]);
     },
     palette: showPalette,
+    quickOpen: showQuickOpen,
+    search: showSearch,
     autoSave: autoSaveAll,
     filesChanged,
     commitPanel: showCommitPanel,
@@ -2518,6 +2925,100 @@ export function App() {
     const tab = tabsRef.current.find((item) => item.path === left);
     if (tab && isDirty(tab) && !tab.paused) void saveTab(tab, true);
   }, [active]);
+
+  /** 应用后台保存或其他窗口修改后的设置。 */
+  function applySettings(next: Settings) {
+    savedSettings.current = next;
+    setFontFamily(next.fontFamily);
+    setFontSize(next.fontSize);
+    setTabSize(next.tabSize);
+    setWrap(next.wrap);
+    setAutoSave(next.autoSave);
+  }
+
+  // 启动时读取设置和侧边栏宽度；读取完成前不写盘，避免用默认值覆盖已保存的设置。
+  useEffect(() => {
+    if (!desktop) return;
+    backend
+      .getSettings()
+      .then((next) => {
+        applySettings(next);
+        settingsLoaded.current = true;
+      })
+      .catch((error) => notify(`读取设置失败：${errorMessage(error)}`));
+    backend
+      .getLayout()
+      .then((layout) => {
+        if (layout.sidebarWidth) {
+          savedSidebarWidth.current = layout.sidebarWidth;
+          setSidebarWidth(layout.sidebarWidth);
+        }
+        sidebarLoaded.current = true;
+      })
+      .catch(() => {
+        sidebarLoaded.current = true;
+      });
+  }, []);
+
+  // 设置变化后稍后写盘；保存失败时退回上次保存的设置。
+  useEffect(() => {
+    if (!settingsLoaded.current) return;
+    const saved = savedSettings.current;
+    const next: Settings = {
+      version: saved?.version ?? 1,
+      fontFamily,
+      fontSize,
+      tabSize,
+      wrap,
+      autoSave,
+    };
+    if (
+      saved &&
+      saved.fontFamily === next.fontFamily &&
+      saved.fontSize === next.fontSize &&
+      saved.tabSize === next.tabSize &&
+      saved.wrap === next.wrap &&
+      saved.autoSave === next.autoSave
+    )
+      return;
+    if (settingsTimer.current !== null)
+      window.clearTimeout(settingsTimer.current);
+    settingsTimer.current = window.setTimeout(() => {
+      settingsTimer.current = null;
+      backend
+        .saveSettings(next)
+        .then(applySettings)
+        .catch((error) => {
+          notify(`设置保存失败：${errorMessage(error)}`);
+          if (savedSettings.current) applySettings(savedSettings.current);
+        });
+    }, SETTINGS_DELAY);
+  }, [fontFamily, fontSize, tabSize, wrap, autoSave]);
+
+  // 侧边栏宽度停止变化后写盘。
+  useEffect(() => {
+    if (!desktop || !sidebarLoaded.current) return;
+    if (sidebarWidth === savedSidebarWidth.current) return;
+    const timer = window.setTimeout(() => {
+      backend
+        .saveSidebarWidth(sidebarWidth)
+        .then(() => {
+          savedSidebarWidth.current = sidebarWidth;
+        })
+        .catch((error) => notify(`侧边栏宽度保存失败：${errorMessage(error)}`));
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [sidebarWidth]);
+
+  // 标签内容或状态变化后计划写入恢复数据。
+  useEffect(() => {
+    scheduleRecovery();
+  }, [tabs]);
+
+  // 打开设置时用当前字体初始化输入框。
+  useEffect(() => {
+    if (settings) setFontDraft(fontFamily);
+  }, [settings]);
 
   // 关闭自动保存时取消等待中的保存；窗口卸载时清理计时器。
   useEffect(() => {
@@ -2552,7 +3053,7 @@ export function App() {
       if (event.isComposing || !(mac ? event.metaKey : event.ctrlKey)) return;
       const key = event.key.toLowerCase();
       if (promptRef.current || namingRef.current) {
-        if (['s', 'w', 'o', 'p', 'b', 'n', 'k'].includes(key))
+        if (['s', 'w', 'o', 'p', 'b', 'n', 'k', 'f'].includes(key))
           event.preventDefault();
         return;
       }
@@ -2593,6 +3094,12 @@ export function App() {
       } else if (key === 'p' && event.shiftKey) {
         event.preventDefault();
         operations.current.palette();
+      } else if (key === 'p') {
+        event.preventDefault();
+        operations.current.quickOpen();
+      } else if (key === 'f' && event.shiftKey) {
+        event.preventDefault();
+        operations.current.search();
       } else if (['=', '+', '-'].includes(key)) {
         event.preventDefault();
         setFontSize((size) =>
@@ -2625,8 +3132,16 @@ export function App() {
       setBusy('关闭窗口');
       void (async () => {
         try {
-          if (await mayDiscard(tabsRef.current))
-            await getCurrentWindow().destroy();
+          const workspace = projectRef.current;
+          if (await mayDiscard(tabsRef.current)) {
+            await finishRecovery();
+            try {
+              await getCurrentWindow().destroy();
+            } catch (error) {
+              if (workspace) resumeRecovery(workspace);
+              throw error;
+            }
+          }
           // 用户返回编辑时退出流程中止，已关闭的窗口不再计入下次恢复。
           else await backend.cancelQuit();
         } catch (error) {
@@ -2643,6 +3158,10 @@ export function App() {
         requestClose();
       }),
       listen('nib://request-close', requestClose),
+      // 其他窗口修改了设置。
+      listen<Settings>('nib://settings-changed', ({ payload }) =>
+        applySettings(payload),
+      ),
       // 后台只把本窗口项目的文件变化发给本窗口。
       getCurrentWebviewWindow().listen<FileChanges>(
         'nib://files-changed',
@@ -2699,9 +3218,9 @@ export function App() {
 
   useEffect(() => {
     if (palette) paletteRef.current?.focus();
-    if (!palette && !settings && !prompt && !projectMenu)
+    if (!palette && !quickOpen && !settings && !prompt && !projectMenu)
       viewRef.current?.focus();
-  }, [palette, settings, prompt, projectMenu]);
+  }, [palette, quickOpen, settings, prompt, projectMenu]);
 
   const selection = selected?.state.selection.main;
   const line =
@@ -2716,6 +3235,9 @@ export function App() {
         {
           '--sidebar-width': `${sidebarWidth}px`,
           '--editor-size': `${fontSize}px`,
+          ...(fontFamily
+            ? { '--editor-font': `${fontFamily}, ${DEFAULT_EDITOR_FONT}` }
+            : {}),
         } as CSSProperties
       }
     >
@@ -2807,6 +3329,17 @@ export function App() {
                     title="当前分支的提交记录"
                   >
                     <History size={14} /> 记录
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={panel === 'search'}
+                    aria-label="搜索"
+                    className={panel === 'search' ? 'active' : ''}
+                    onClick={showSearch}
+                    disabled={!project}
+                    title={`在项目中搜索 (${mod}+Shift+F)`}
+                  >
+                    <Search size={14} />
                   </button>
                 </div>
                 <button
@@ -2900,7 +3433,7 @@ export function App() {
                     </p>
                   </div>
                 )
-              ) : project ? (
+              ) : project && panel === 'search' ? null : project ? (
                 <Explorer
                   key={project.id}
                   project={project}
@@ -2936,6 +3469,22 @@ export function App() {
                   >
                     打开文件夹 <kbd>{mod} O</kbd>
                   </button>
+                </div>
+              )}
+              {project && (
+                // 切换到其他面板时保留搜索内容和结果。
+                <div
+                  className="search-host"
+                  style={{ display: panel === 'search' ? undefined : 'none' }}
+                >
+                  <SearchPanel
+                    key={project.id}
+                    projectId={project.id}
+                    focus={searchFocus}
+                    onOpen={(path, match) =>
+                      void openAt(path, match.line, match.column, match.length)
+                    }
+                  />
                 </div>
               )}
               <div className="sidebar-bottom">
@@ -3149,7 +3698,9 @@ export function App() {
             <Editor
               tab={selected}
               wrap={wrap}
+              indent={tabSize}
               locked={Boolean(busy) || Boolean(prompt)}
+              reveal={reveal}
               onChange={editorChange}
               viewRef={viewRef}
             />
@@ -3195,7 +3746,7 @@ export function App() {
                   </button>
                   {project && (
                     <p className="project-hint">
-                      从左侧文件树选择文件开始编辑。
+                      从左侧文件树选择文件，或按 {mod} P 快速打开。
                     </p>
                   )}
                   {desktop && !project && (
@@ -3368,13 +3919,13 @@ export function App() {
         <div
           className="popover settings"
           role="dialog"
-          aria-label="编辑器显示设置"
+          aria-label="设置"
           onKeyDown={(event) => {
             if (event.key === 'Escape') setSettings(false);
           }}
         >
           <div className="popover-title">
-            编辑器显示
+            设置
             <button
               className="icon-button"
               aria-label="关闭设置"
@@ -3383,6 +3934,21 @@ export function App() {
               <X size={14} />
             </button>
           </div>
+          <label className="settings-font">
+            字体
+            <input
+              value={fontDraft}
+              placeholder="默认等宽字体"
+              spellCheck={false}
+              title="CSS 字体名，多个用逗号分隔，如 'JetBrains Mono', Menlo"
+              onChange={(event) => setFontDraft(event.target.value)}
+              onBlur={() => setFontFamily(fontDraft.trim())}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.nativeEvent.isComposing)
+                  setFontFamily(fontDraft.trim());
+              }}
+            />
+          </label>
           <label>
             字号{' '}
             <div>
@@ -3402,6 +3968,19 @@ export function App() {
             </div>
           </label>
           <label>
+            缩进宽度
+            <select
+              value={tabSize}
+              onChange={(event) => setTabSize(Number(event.target.value))}
+            >
+              {[2, 4, 8].map((size) => (
+                <option key={size} value={size}>
+                  {size} 个空格
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             自动换行{' '}
             <input
               type="checkbox"
@@ -3417,8 +3996,27 @@ export function App() {
               onChange={(event) => setAutoSave(event.target.checked)}
             />
           </label>
-          <p>当前会话生效 · {mod} + / − 调整字号</p>
+          <p>
+            保存在 ~/.nib/settings.json，所有窗口共用 · {mod} + / − 调整字号
+          </p>
         </div>
+      )}
+
+      {quickOpen && project && (
+        <QuickOpen
+          key={project.id}
+          projectId={project.id}
+          // 其他已打开的文件在前，当前文件放最后，回车即可切换到别的文件。
+          recent={[
+            ...tabs.filter((tab) => tab.path !== active),
+            ...tabs.filter((tab) => tab.path === active),
+          ].map((tab) => tab.path)}
+          onOpen={(path, line) => {
+            if (line) void openAt(path, line);
+            else void openFile(path);
+          }}
+          onClose={() => setQuickOpen(false)}
+        />
       )}
 
       {palette && (
@@ -3617,6 +4215,8 @@ function UnsavedDialog({
         <div className="dialog-icon">
           {kind === 'unsaved' ? (
             <ArrowDownToLine size={22} />
+          ) : kind === 'recover' ? (
+            <ArchiveRestore size={22} />
           ) : kind === 'rebase' ? (
             <GitMerge size={22} />
           ) : kind === 'delete' || branchPrompts.has(kind) ? (
@@ -3626,11 +4226,13 @@ function UnsavedDialog({
           )}
         </div>
         <h2 id="unsaved-title">
-          {kind === 'unsaved' ? '保存这次修改？' : confirmations[kind].title}
+          {kind === 'unsaved' || kind === 'recover'
+            ? promptChoices[kind].title
+            : confirmations[kind].title}
         </h2>
         <p id="unsaved-description">
-          {kind === 'unsaved'
-            ? '以下文件的修改尚未保存到磁盘。放弃后将无法恢复。'
+          {kind === 'unsaved' || kind === 'recover'
+            ? promptChoices[kind].description
             : confirmations[kind].description}
           {note && <strong className="dialog-note">{note}</strong>}
         </p>
@@ -3646,22 +4248,22 @@ function UnsavedDialog({
             </li>
           ))}
         </ul>
-        {kind === 'unsaved' ? (
+        {kind === 'unsaved' || kind === 'recover' ? (
           <div className="dialog-actions">
             <button
               className="secondary-button"
               onClick={() => onDecide('cancel')}
             >
-              返回编辑
+              {promptChoices[kind].cancel}
             </button>
             <button
               className="text-button danger"
               onClick={() => onDecide('discard')}
             >
-              放弃修改
+              {promptChoices[kind].discard}
             </button>
             <button className="primary-button" onClick={() => onDecide('save')}>
-              保存并继续
+              {promptChoices[kind].save}
             </button>
           </div>
         ) : (

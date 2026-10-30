@@ -213,6 +213,73 @@ export function errorMessage(error: unknown): string {
   return String(error);
 }
 
+/** 快速打开使用的项目文件，路径相对项目根目录。 */
+export interface FileList {
+  files: string[];
+  truncated: boolean;
+}
+
+export interface SearchOptions {
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  regex: boolean;
+  /** 同时搜索被 .gitignore 等规则忽略的文件。 */
+  includeIgnored: boolean;
+}
+
+/** 一处匹配；行号从 1 开始，列与长度按 UTF-16 计算，与编辑器一致。 */
+export interface SearchMatch {
+  line: number;
+  column: number;
+  length: number;
+  before: string;
+  matched: string;
+  after: string;
+}
+
+export interface FileMatches {
+  path: string;
+  matches: SearchMatch[];
+  truncated: boolean;
+}
+
+export interface SearchResult {
+  files: FileMatches[];
+  total: number;
+  /** 匹配过多，遍历提前结束。 */
+  truncated: boolean;
+  /** 过大或不是 UTF-8 编码而未搜索的文件数。 */
+  skipped: number;
+}
+
+/** 用户设置，保存在 ~/.nib/settings.json。 */
+export interface Settings {
+  version: number;
+  /** 编辑器字体（CSS font-family），为空时使用内置等宽字体。 */
+  fontFamily: string;
+  fontSize: number;
+  tabSize: number;
+  wrap: boolean;
+  autoSave: boolean;
+}
+
+/** 上次记录的窗口尺寸与侧边栏宽度。 */
+export interface Layout {
+  width: number | null;
+  height: number | null;
+  sidebarWidth: number | null;
+}
+
+/** 上次未正常关闭时留下的未保存内容。 */
+export interface RecoveryEntry {
+  path: string;
+  /** 编辑器中的文本（LF 换行）。 */
+  content: string;
+  /** 编辑所基于的磁盘版本。 */
+  revision: string;
+  savedAt: number;
+}
+
 /** 提取后台结构化错误的错误码，非后台错误返回 null。 */
 export function errorCode(error: unknown): string | null {
   if (typeof error === 'object' && error !== null && 'code' in error) {
@@ -337,6 +404,29 @@ export const backend = {
     invoke<Integration>('git_skip', { projectId }),
   /** 中止合并或变基，恢复到开始前的状态。 */
   gitAbort: (projectId: number) => invoke<void>('git_abort', { projectId }),
+  searchFiles: (projectId: number) =>
+    invoke<FileList>('search_files', { projectId }),
+  /** 项目文本搜索；同一窗口开始新搜索时之前的搜索以 CANCELLED 结束。 */
+  searchText: (projectId: number, query: string, options: SearchOptions) =>
+    invoke<SearchResult>('search_text', { projectId, query, options }),
+  cancelSearch: () => invoke<void>('cancel_search'),
+  getSettings: () => invoke<Settings>('get_settings'),
+  /** 保存设置，返回校验后的设置；所有窗口收到 nib://settings-changed。 */
+  saveSettings: (settings: Settings) =>
+    invoke<Settings>('save_settings', { settings }),
+  getLayout: () => invoke<Layout>('get_layout'),
+  saveSidebarWidth: (width: number) =>
+    invoke<void>('save_sidebar_width', { width }),
+  recoverySave: (
+    projectId: number,
+    path: string,
+    content: string,
+    revision: string,
+  ) => invoke<void>('recovery_save', { projectId, path, content, revision }),
+  recoveryDiscard: (projectId: number, paths: string[]) =>
+    invoke<void>('recovery_discard', { projectId, paths }),
+  recoveryList: (projectId: number) =>
+    invoke<RecoveryEntry[]>('recovery_list', { projectId }),
   /** 把未跟踪的文件或目录写入项目根目录的 .gitignore。 */
   gitIgnore: (projectId: number, paths: string[]) =>
     invoke<void>('git_ignore', { projectId, paths }),

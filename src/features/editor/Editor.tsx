@@ -2,23 +2,49 @@ import { useLayoutEffect, useRef } from 'react';
 import { EditorView } from '@codemirror/view';
 import type { EditorState } from '@codemirror/state';
 import type { Tab } from './model';
-import { editableCompartment, wrapCompartment } from './model';
+import {
+  editableCompartment,
+  indentCompartment,
+  indentation,
+  wrapCompartment,
+} from './model';
+
+/** 打开文件后要定位的位置；行号从 1 开始，列与长度按 UTF-16 计算。key 变化时重新定位。 */
+export interface Reveal {
+  path: string;
+  line: number;
+  column: number;
+  length: number;
+  key: number;
+}
 
 interface Props {
   tab: Tab | undefined;
   wrap: boolean;
+  /** 缩进宽度。 */
+  indent: number;
   locked: boolean;
+  reveal: Reveal | null;
   onChange: (path: string, state: EditorState) => void;
   viewRef: React.RefObject<EditorView | null>;
 }
 
 /** 整个窗口复用一个视图，各标签的状态与撤销栈独立保留。 */
-export function Editor({ tab, wrap, locked, onChange, viewRef }: Props) {
+export function Editor({
+  tab,
+  wrap,
+  indent,
+  locked,
+  reveal,
+  onChange,
+  viewRef,
+}: Props) {
   const host = useRef<HTMLDivElement>(null);
   const callback = useRef(onChange);
   callback.current = onChange;
   const currentTab = useRef(tab);
   const switching = useRef(false);
+  const revealed = useRef<number | null>(null);
 
   useLayoutEffect(() => {
     if (!host.current) return;
@@ -61,6 +87,12 @@ export function Editor({ tab, wrap, locked, onChange, viewRef }: Props) {
       view.dispatch({ effects: wrapCompartment.reconfigure(extension) });
       tab.state = view.state;
     }
+    if (view.state.tabSize !== indent) {
+      view.dispatch({
+        effects: indentCompartment.reconfigure(indentation(indent)),
+      });
+      tab.state = view.state;
+    }
     if (view.state.facet(EditorView.editable) === locked) {
       view.dispatch({
         effects: editableCompartment.reconfigure(
@@ -75,7 +107,31 @@ export function Editor({ tab, wrap, locked, onChange, viewRef }: Props) {
       view.scrollDOM.scrollLeft = tab.scroll.left;
       view.focus();
     }
-  }, [tab, wrap, locked, viewRef]);
+  }, [tab, wrap, indent, locked, viewRef]);
+
+  // 在切换标签、恢复滚动位置之后选中并滚动到目标位置；同一次定位只执行一次。
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    if (
+      !view ||
+      !tab ||
+      !reveal ||
+      reveal.path !== tab.path ||
+      revealed.current === reveal.key
+    )
+      return;
+    revealed.current = reveal.key;
+    // 文件可能在搜索后被编辑，行列超出时收缩到行尾。
+    const doc = view.state.doc;
+    const line = doc.line(Math.min(Math.max(1, reveal.line), doc.lines));
+    const from = Math.min(line.from + reveal.column, line.to);
+    const to = Math.min(from + reveal.length, line.to);
+    view.dispatch({
+      selection: { anchor: from, head: to },
+      effects: EditorView.scrollIntoView(from, { y: 'center' }),
+    });
+    view.focus();
+  }, [reveal, tab, viewRef]);
 
   return (
     <div

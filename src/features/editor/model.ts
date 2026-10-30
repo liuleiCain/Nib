@@ -3,7 +3,11 @@ import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { basicSetup } from 'codemirror';
 import { indentWithTab } from '@codemirror/commands';
-import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import {
+  HighlightStyle,
+  indentUnit,
+  syntaxHighlighting,
+} from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import type { Document } from '../../lib/backend';
 import { gitChanges } from '../git/changes';
@@ -27,6 +31,12 @@ export interface Tab {
 
 export const wrapCompartment = new Compartment();
 export const editableCompartment = new Compartment();
+export const indentCompartment = new Compartment();
+
+/** 缩进宽度：Tab 显示宽度与自动缩进的空格数一致。 */
+export function indentation(size: number): Extension {
+  return [EditorState.tabSize.of(size), indentUnit.of(' '.repeat(size))];
+}
 
 const highlight = HighlightStyle.define([
   { tag: tags.keyword, color: '#b6a0d6' },
@@ -167,7 +177,7 @@ export async function createTab(
       keymap.of([indentWithTab]),
       wrapCompartment.of([]),
       editableCompartment.of(EditorView.editable.of(true)),
-      EditorState.tabSize.of(4),
+      indentCompartment.of(indentation(4)),
       EditorState.readOnly.of(document.truncated),
       gitChanges,
     ],

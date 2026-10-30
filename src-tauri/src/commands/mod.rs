@@ -1,7 +1,7 @@
 use std::{path::Path, sync::Arc};
 
 use serde::Serialize;
-use tauri::{AppHandle, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, State, WebviewWindow};
 
 use crate::{
     error::{AppError, AppResult},
@@ -10,7 +10,10 @@ use crate::{
         self, Branches, CommitDetail, CommitResult, DiffSources, GitLocks, GitStatus, Integration,
         LogPage, PullResult, PushResult, Side,
     },
-    session::{ProjectTabs, SessionStore},
+    recovery::{RecoveryEntry, RecoveryStore},
+    search::{self, FileList, SearchOptions, SearchResult, Searches},
+    session::{Layout, ProjectTabs, SessionStore},
+    settings::{Settings, SettingsStore},
     watcher::Watchers,
     window,
     workspace::{self, Project, Workspaces},
@@ -683,4 +686,126 @@ pub async fn git_abort(
     let state = workspaces.get(window.label())?;
     let locks = locks.inner().clone();
     blocking(move || git::abort(&state, &locks, project_id)).await
+}
+
+#[tauri::command]
+/// 快速打开使用的项目文件列表，尊重 .gitignore。
+pub async fn search_files(
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
+    project_id: u64,
+) -> AppResult<FileList> {
+    let state = workspaces.get(window.label())?;
+    blocking(move || search::files(&state, project_id)).await
+}
+
+#[tauri::command]
+/// 在项目中搜索文本；同一窗口开始新搜索时之前的搜索停止。
+pub async fn search_text(
+    workspaces: State<'_, Workspaces>,
+    searches: State<'_, Searches>,
+    window: WebviewWindow,
+    project_id: u64,
+    query: String,
+    options: SearchOptions,
+) -> AppResult<SearchResult> {
+    let state = workspaces.get(window.label())?;
+    let searches = searches.inner().clone();
+    let label = window.label().to_owned();
+    blocking(move || search::search(&state, &searches, &label, project_id, &query, &options)).await
+}
+
+#[tauri::command]
+/// 取消本窗口进行中的搜索。
+pub fn cancel_search(searches: State<'_, Searches>, window: WebviewWindow) -> AppResult<()> {
+    searches.cancel(window.label())
+}
+
+#[tauri::command]
+pub fn get_settings(settings: State<'_, Arc<SettingsStore>>) -> AppResult<Settings> {
+    settings.get()
+}
+
+#[tauri::command]
+/// 保存设置并通知所有窗口应用。
+pub async fn save_settings(
+    app: AppHandle,
+    store: State<'_, Arc<SettingsStore>>,
+    settings: Settings,
+) -> AppResult<Settings> {
+    let store = store.inner().clone();
+    let saved = blocking(move || store.save(settings)).await?;
+    // 通知失败只影响其他窗口的即时同步，下次打开窗口时仍会读取新设置。
+    let _ = app.emit("nib://settings-changed", &saved);
+    Ok(saved)
+}
+
+#[tauri::command]
+/// 上次记录的窗口尺寸与侧边栏宽度。
+pub fn get_layout(sessions: State<'_, Arc<SessionStore>>) -> AppResult<Layout> {
+    sessions.layout()
+}
+
+#[tauri::command]
+pub async fn save_sidebar_width(
+    sessions: State<'_, Arc<SessionStore>>,
+    width: u32,
+) -> AppResult<()> {
+    let sessions = sessions.inner().clone();
+    blocking(move || sessions.save_sidebar_width(width)).await
+}
+
+#[tauri::command]
+/// 写入一个文件未保存内容的恢复数据。
+pub async fn recovery_save(
+    workspaces: State<'_, Workspaces>,
+    recovery: State<'_, Arc<RecoveryStore>>,
+    window: WebviewWindow,
+    project_id: u64,
+    path: String,
+    content: String,
+    revision: String,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    let recovery = recovery.inner().clone();
+    blocking(move || {
+        let root = state.lock()?.root_text(project_id)?;
+        recovery.save(&root, &path, content, revision)
+    })
+    .await
+}
+
+#[tauri::command]
+/// 删除文件的恢复数据。
+pub async fn recovery_discard(
+    workspaces: State<'_, Workspaces>,
+    recovery: State<'_, Arc<RecoveryStore>>,
+    window: WebviewWindow,
+    project_id: u64,
+    paths: Vec<String>,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    let recovery = recovery.inner().clone();
+    blocking(move || {
+        let root = state.lock()?.root_text(project_id)?;
+        recovery.discard(&root, &paths)
+    })
+    .await
+}
+
+#[tauri::command]
+/// 项目中上次未正常关闭时留下的恢复数据。
+pub async fn recovery_list(
+    workspaces: State<'_, Workspaces>,
+    recovery: State<'_, Arc<RecoveryStore>>,
+    window: WebviewWindow,
+    project_id: u64,
+) -> AppResult<Vec<RecoveryEntry>> {
+    let state = workspaces.get(window.label())?;
+    let recovery = recovery.inner().clone();
+    blocking(move || {
+        let root = state.lock()?.root_text(project_id)?;
+        recovery.list(&root)
+    })
+    .await
 }

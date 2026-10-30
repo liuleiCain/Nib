@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use tauri::{AppHandle, Manager, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, LogicalSize, Manager, PhysicalSize, WebviewWindow, WebviewWindowBuilder};
 
 use crate::{
     error::{AppError, AppResult},
+    search::Searches,
     session::SessionStore,
     watcher::Watchers,
     workspace::Workspaces,
@@ -37,6 +38,13 @@ pub fn create(app: &AppHandle, pending: Option<String>) -> AppResult<()> {
             })
         })
         .cloned();
+    // 使用上次记录的窗口尺寸，不小于配置的最小尺寸；显示前再按屏幕大小收缩。
+    if let Ok(layout) = app.state::<Arc<SessionStore>>().layout() {
+        if let (Some(width), Some(height)) = (layout.width, layout.height) {
+            config.width = f64::from(width).max(config.min_width.unwrap_or(0.0));
+            config.height = f64::from(height).max(config.min_height.unwrap_or(0.0));
+        }
+    }
     let label = workspaces.register(pending)?;
     config.label = label.clone();
     // 并入标签组后再显示，避免先闪现一个独立窗口。
@@ -49,7 +57,45 @@ pub fn create(app: &AppHandle, pending: Option<String>) -> AppResult<()> {
                 return Err(error.into());
             }
         };
+    fit_monitor(&window);
     present(app, window, anchor)
+}
+
+/// 记录的尺寸来自更大的显示器时，收缩到当前显示器之内。
+fn fit_monitor(window: &WebviewWindow) {
+    let (Ok(Some(monitor)), Ok(size), Ok(scale)) = (
+        window.current_monitor(),
+        window.inner_size(),
+        window.scale_factor(),
+    ) else {
+        return;
+    };
+    let screen = monitor.size().to_logical::<f64>(monitor.scale_factor());
+    let current = size.to_logical::<f64>(scale);
+    if current.width > screen.width || current.height > screen.height {
+        let _ = window.set_size(LogicalSize::new(
+            current.width.min(screen.width),
+            current.height.min(screen.height),
+        ));
+    }
+}
+
+/// 窗口尺寸变化时记录逻辑尺寸；最大化、全屏和最小化时不记录，保留普通窗口的尺寸。
+pub fn resized(window: &tauri::Window, size: PhysicalSize<u32>) {
+    let normal = !window.is_maximized().unwrap_or(true)
+        && !window.is_fullscreen().unwrap_or(true)
+        && !window.is_minimized().unwrap_or(true);
+    if !normal || size.width == 0 || size.height == 0 {
+        return;
+    }
+    let Ok(scale) = window.scale_factor() else {
+        return;
+    };
+    let logical = size.to_logical::<f64>(scale);
+    window
+        .app_handle()
+        .state::<Arc<SessionStore>>()
+        .resized(logical.width.round() as u32, logical.height.round() as u32);
 }
 
 /// 在主线程将窗口并入 anchor 的标签组并显示；并入失败时作为独立窗口显示。
@@ -102,7 +148,7 @@ pub fn focus(app: &AppHandle, label: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// 窗口销毁后停止项目监听并释放工作区。
+/// 窗口销毁后停止项目监听、搜索并释放工作区，写入窗口尺寸。
 ///
 /// 退出应用或关闭最后一个窗口时保留项目，下次启动恢复；其余情况视为关闭项目。
 pub fn destroyed(app: &AppHandle, label: &str) {
@@ -117,6 +163,8 @@ pub fn destroyed(app: &AppHandle, label: &str) {
             let _ = sessions.closed(&root);
         }
     }
+    let _ = sessions.flush();
     app.state::<Watchers>().stop(label);
+    app.state::<Searches>().remove(label);
     workspaces.remove(label);
 }

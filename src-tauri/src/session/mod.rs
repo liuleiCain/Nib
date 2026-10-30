@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     fs,
-    io::Write,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -11,12 +10,17 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{AppError, AppResult};
+use crate::{
+    common::write_atomic,
+    error::{AppError, AppResult},
+};
 
 const VERSION: u32 = 1;
 const MAX_RECENT: usize = 20;
 const MAX_TABS: usize = 30;
 const MAX_PATH_LENGTH: usize = 4096;
+/// 侧边栏宽度范围，与界面拖动范围一致。
+const SIDEBAR_WIDTH: (u32, u32) = (180, 420);
 
 /// 最近项目、各项目标签和退出时打开的项目，与项目文件分开存放在用户目录的 `.nib` 下。
 pub struct SessionStore {
@@ -33,6 +37,19 @@ struct Session {
     recent: Vec<RecentProject>,
     open: Vec<String>,
     projects: HashMap<String, ProjectTabs>,
+    /// 旧版会话文件没有此项，按默认值读取。
+    #[serde(default)]
+    layout: Layout,
+}
+
+/// 窗口尺寸与侧边栏宽度，所有项目窗口共用最近一次的值。
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Layout {
+    /// 窗口内容区的逻辑尺寸；最大化、全屏时不记录。
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub sidebar_width: Option<u32>,
 }
 
 /// 最近项目列表中的一项，按最近打开排序。
@@ -58,6 +75,7 @@ impl Default for Session {
             recent: Vec::new(),
             open: Vec::new(),
             projects: HashMap::new(),
+            layout: Layout::default(),
         }
     }
 }
@@ -84,22 +102,11 @@ impl SessionStore {
             .map_err(|_| AppError::new("SESSION", "会话记录暂时不可用，请重新启动 Nib。"))
     }
 
-    /// 在配置目录写临时文件后原子替换，写入失败不影响内存中的会话。
+    /// 原子写入会话文件，写入失败不影响内存中的会话。
     fn persist(&self, session: &Session) -> AppResult<()> {
-        let directory = self
-            .path
-            .parent()
-            .ok_or_else(|| AppError::new("SESSION", "会话文件路径无效。"))?;
-        fs::create_dir_all(directory)?;
         let bytes = serde_json::to_vec_pretty(session)
             .map_err(|_| AppError::new("SESSION", "会话记录序列化失败。"))?;
-        let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
-        temporary.write_all(&bytes)?;
-        temporary.as_file().sync_all()?;
-        temporary
-            .persist(&self.path)
-            .map_err(|error| AppError::from(error.error))?;
-        Ok(())
+        write_atomic(&self.path, &bytes)
     }
 
     /// 修改会话并立即写盘；持锁写入保证多窗口的写入顺序与内存一致。
@@ -180,6 +187,32 @@ impl SessionStore {
         self.update(|session| {
             session.projects.insert(root.to_owned(), tabs);
         })
+    }
+
+    /// 上次记录的窗口尺寸与侧边栏宽度。
+    pub fn layout(&self) -> AppResult<Layout> {
+        Ok(self.data()?.layout.clone())
+    }
+
+    /// 窗口尺寸变化时只更新内存，窗口关闭时由 flush 写盘，避免拖动窗口时频繁写入。
+    pub fn resized(&self, width: u32, height: u32) {
+        if let Ok(mut session) = self.data() {
+            session.layout.width = Some(width);
+            session.layout.height = Some(height);
+        }
+    }
+
+    /// 记录侧边栏宽度；超出范围时拒绝。
+    pub fn save_sidebar_width(&self, width: u32) -> AppResult<()> {
+        if !(SIDEBAR_WIDTH.0..=SIDEBAR_WIDTH.1).contains(&width) {
+            return Err(AppError::new("SESSION", "侧边栏宽度超出范围，未保存。"));
+        }
+        self.update(|session| session.layout.sidebar_width = Some(width))
+    }
+
+    /// 把内存中的会话写盘，用于窗口关闭时保存尺寸。
+    pub fn flush(&self) -> AppResult<()> {
+        self.update(|_| {})
     }
 
     /// 标记应用正在退出，期间关闭的窗口保留在打开列表中供下次恢复。

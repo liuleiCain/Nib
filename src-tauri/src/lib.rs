@@ -1,8 +1,12 @@
 mod commands;
+mod common;
 mod error;
 mod filesystem;
 mod git;
+mod recovery;
+mod search;
 mod session;
+mod settings;
 mod watcher;
 mod window;
 mod workspace;
@@ -12,7 +16,10 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 use git::GitLocks;
+use recovery::RecoveryStore;
+use search::Searches;
 use session::SessionStore;
+use settings::SettingsStore;
 use watcher::Watchers;
 use workspace::Workspaces;
 
@@ -24,10 +31,14 @@ pub fn run() {
         .manage(Workspaces::default())
         .manage(Watchers::default())
         .manage(GitLocks::default())
+        .manage(Searches::default())
         .setup(|app| {
-            // 会话数据放在用户目录的 .nib 下，删除该目录即清空所有记录。
-            let sessions = Arc::new(SessionStore::load(app.path().home_dir()?.join(".nib")));
+            // 会话、设置和恢复数据放在用户目录的 .nib 下，分别存放；删除该目录即清空所有记录。
+            let directory = app.path().home_dir()?.join(".nib");
+            let sessions = Arc::new(SessionStore::load(directory.clone()));
             app.manage(sessions.clone());
+            app.manage(Arc::new(SettingsStore::load(directory.clone())));
+            app.manage(Arc::new(RecoveryStore::new(directory)));
             // 只恢复目录仍可访问的项目，其余从下次恢复列表中移除。
             let mut roots: Vec<String> = Vec::new();
             for root in sessions.open_projects() {
@@ -46,10 +57,10 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|target, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                window::destroyed(target.app_handle(), target.label());
-            }
+        .on_window_event(|target, event| match event {
+            tauri::WindowEvent::Destroyed => window::destroyed(target.app_handle(), target.label()),
+            tauri::WindowEvent::Resized(size) => window::resized(target, *size),
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             commands::window_startup,
@@ -95,6 +106,16 @@ pub fn run() {
             commands::rename_entry,
             commands::trash_entry,
             commands::reveal_entry,
+            commands::search_files,
+            commands::search_text,
+            commands::cancel_search,
+            commands::get_settings,
+            commands::save_settings,
+            commands::get_layout,
+            commands::save_sidebar_width,
+            commands::recovery_save,
+            commands::recovery_discard,
+            commands::recovery_list,
         ])
         .build(tauri::generate_context!())
         .expect("Nib 启动失败")
