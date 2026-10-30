@@ -23,8 +23,8 @@ pub use history::{commit_detail, commit_diff, log, CommitDetail, LogPage};
 pub use merge::{abort, merge, proceed, rebase, resolve, skip, Integration};
 pub use remote::{
     add_remote, branches, checkout_remote, create_branch, delete_branch, delete_remote_branch,
-    fetch, pull, push, remove_remote, rename_branch, rename_remote, set_remote_url, switch_branch,
-    Branches, PullResult, PushResult,
+    fetch, outgoing, pull, push, remove_remote, rename_branch, rename_remote, set_remote_url,
+    switch_branch, Branches, Outgoing, PullResult, PushResult,
 };
 
 /// 读取类命令的超时；超时后结束进程并提示。

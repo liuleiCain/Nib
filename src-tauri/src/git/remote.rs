@@ -6,8 +6,10 @@ use std::{path::Path, time::Duration};
 use serde::Serialize;
 
 use super::{
-    failure, history::has_commits, lines, project_root, repo_info, run, spawn, write_guard,
-    write_timeout, GitLocks, Output, COMMIT_TIMEOUT, ERROR_LIMIT, READ_TIMEOUT,
+    failure,
+    history::{has_commits, parse_log, CommitSummary, LOG_FORMAT, LOG_LIMIT},
+    lines, project_root, repo_info, run, spawn, write_guard, write_timeout, GitLocks, Output,
+    COMMIT_TIMEOUT, ERROR_LIMIT, READ_TIMEOUT,
 };
 use crate::{
     error::{AppError, AppResult},
@@ -18,6 +20,8 @@ use crate::{
 const REMOTE_TIMEOUT: Duration = Duration::from_secs(180);
 /// 分支弹窗最多列出的远程分支数，超出时前端提示用搜索缩小范围。
 const MAX_REMOTE_BRANCHES: usize = 2_000;
+/// 推送确认框最多列出的待推送提交数。
+const MAX_OUTGOING: usize = 1_000;
 
 /// 一个本地分支及其上游。
 #[derive(Serialize)]
@@ -73,6 +77,26 @@ pub struct Branches {
 pub struct PullResult {
     pub upstream: String,
     pub commits: u32,
+}
+
+/// 推送前的预览：推送目标与本地有、远程记录中没有的提交。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Outgoing {
+    pub branch: String,
+    /// 预览时的 HEAD 提交，推送时据此确认没有新的提交。
+    pub head: String,
+    /// 已设置的上游（如 origin/main）；为空时推送到 remote 并设为上游。
+    pub upstream: Option<String>,
+    /// 推送到的远程仓库。
+    pub remote: String,
+    /// 已配置的远程仓库，没有上游时供选择。
+    pub remotes: Vec<String>,
+    /// 远程分支在本地记录中不存在，推送将在远程新建分支。
+    pub new_branch: bool,
+    /// 待推送的提交，新的在前，最多 MAX_OUTGOING 个。
+    pub commits: Vec<CommitSummary>,
+    pub total: usize,
 }
 
 /// Push 的目标上游分支。
@@ -928,12 +952,121 @@ pub fn pull(state: &WorkspaceState, locks: &GitLocks, id: u64) -> AppResult<Pull
     }
 }
 
+/// 推送前预览当前分支要推送的提交，与 push 使用相同的目标：已有上游时为上游（已在远程删除时按原配置），
+/// 否则为 remote，未指定时优先 origin。
+///
+/// 按本地记录的远程分支计算，远程在上次获取后的变化不会反映；远程分支不存在时列出该远程所有分支都没有的提交。
+pub fn outgoing(state: &WorkspaceState, id: u64, remote: Option<&str>) -> AppResult<Outgoing> {
+    let root = project_root(state, id)?;
+    repo_info(&root)?.ok_or_else(|| AppError::new("GIT", "项目不在 Git 仓库内。"))?;
+    let Some(branch) = current_branch(&root)? else {
+        return Err(AppError::new(
+            "PUSH",
+            "当前处于游离 HEAD，没有可推送的分支。请先切换到一个本地分支。",
+        ));
+    };
+    if !has_commits(&root)? {
+        return Err(AppError::new("PUSH", "仓库还没有提交，没有可推送的内容。"));
+    }
+    let remotes = remote_names(&root)?;
+    let (upstream, resolved) = match upstream(&root)? {
+        Some(target) => (Some(target), true),
+        None => (configured_upstream(&root, &branch)?, false),
+    };
+    let (target_remote, exclude) = match &upstream {
+        Some(target) => {
+            // 远程名可能含 /，按已配置的远程中最长的前缀匹配。
+            let name = remotes
+                .iter()
+                .filter(|name| target.starts_with(&format!("{name}/")))
+                .max_by_key(|name| name.len())
+                .cloned()
+                .unwrap_or_else(|| target.split('/').next().unwrap_or_default().to_owned());
+            let exclude = resolved.then(|| "@{upstream}".to_owned());
+            (name, exclude)
+        }
+        None => {
+            let name = match remote {
+                Some(name) if remotes.iter().any(|item| item == name) => name.to_owned(),
+                Some(name) => {
+                    return Err(AppError::new("PUSH", format!("远程仓库 {name} 不存在。")))
+                }
+                None => remotes
+                    .iter()
+                    .find(|name| *name == "origin")
+                    .or_else(|| remotes.first())
+                    .cloned()
+                    .ok_or_else(|| {
+                        AppError::new(
+                            "REMOTE",
+                            "仓库没有配置远程仓库，可在分支弹窗的“远程仓库”中添加后再推送。",
+                        )
+                    })?,
+            };
+            let refname = format!("refs/remotes/{name}/{branch}");
+            let exclude = ref_exists(&root, &refname)?.then_some(refname);
+            (name, exclude)
+        }
+    };
+    let new_branch = exclude.is_none();
+    let remotes_glob = format!("--remotes={target_remote}");
+    let not: Vec<&str> = match &exclude {
+        Some(refname) => vec!["--not", refname],
+        None => vec!["--not", &remotes_glob],
+    };
+    let mut count_args = vec!["rev-list", "--count", "HEAD"];
+    count_args.extend(&not);
+    let output = run(&root, &count_args, None, ERROR_LIMIT, READ_TIMEOUT)?;
+    if !output.success {
+        return Err(failure(&output));
+    }
+    let total = first_line(&output)
+        .and_then(|line| line.parse().ok())
+        .unwrap_or(0);
+    let head = first_line(&run(
+        &root,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+        None,
+        ERROR_LIMIT,
+        READ_TIMEOUT,
+    )?)
+    .ok_or_else(|| AppError::new("PUSH", "无法读取当前提交。"))?;
+    let max = format!("--max-count={MAX_OUTGOING}");
+    let mut log_args = vec![
+        "log",
+        "-z",
+        "--no-color",
+        "--decorate=full",
+        LOG_FORMAT,
+        &max,
+        "HEAD",
+    ];
+    log_args.extend(&not);
+    let output = run(&root, &log_args, None, LOG_LIMIT, READ_TIMEOUT)?;
+    if !output.success {
+        return Err(failure(&output));
+    }
+    Ok(Outgoing {
+        branch,
+        head,
+        upstream,
+        remote: target_remote,
+        remotes,
+        new_branch,
+        commits: parse_log(&output),
+        total,
+    })
+}
+
 /// 推送当前分支。已有上游时按 Git 配置推送；否则推送到 remote 并设为上游。
+///
+/// head 为确认推送时看到的 HEAD 提交；HEAD 已变化时拒绝（返回 PUSH_CHANGED），避免推送未经确认的提交。
 pub fn push(
     state: &WorkspaceState,
     locks: &GitLocks,
     id: u64,
     remote: Option<&str>,
+    head: Option<&str>,
 ) -> AppResult<PushResult> {
     let root = project_root(state, id)?;
     let info = repo_info(&root)?.ok_or_else(|| AppError::new("GIT", "项目不在 Git 仓库内。"))?;
@@ -947,6 +1080,21 @@ pub fn push(
     };
     if !has_commits(&root)? {
         return Err(AppError::new("PUSH", "仓库还没有提交，没有可推送的内容。"));
+    }
+    if let Some(head) = head {
+        let current = first_line(&run(
+            &root,
+            &["rev-parse", "--verify", "HEAD^{commit}"],
+            None,
+            ERROR_LIMIT,
+            READ_TIMEOUT,
+        )?);
+        if current.as_deref() != Some(head) {
+            return Err(AppError::new(
+                "PUSH_CHANGED",
+                "确认后当前分支有了新的提交，已取消推送。请重新打开推送确认。",
+            ));
+        }
     }
     let existing = match upstream(&root)? {
         Some(target) => Some(target),

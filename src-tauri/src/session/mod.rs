@@ -19,8 +19,12 @@ const VERSION: u32 = 1;
 const MAX_RECENT: usize = 20;
 const MAX_TABS: usize = 30;
 const MAX_PATH_LENGTH: usize = 4096;
+/// 每个项目最多记录的展开目录数。
+const MAX_EXPANDED: usize = 200;
 /// 侧边栏宽度范围，与界面拖动范围一致。
 const SIDEBAR_WIDTH: (u32, u32) = (180, 420);
+/// 可记录的侧边栏面板。
+const PANELS: [&str; 4] = ["files", "commit", "log", "search"];
 
 /// 最近项目、各项目标签和退出时打开的项目，与项目文件分开存放在用户目录的 `.nib` 下。
 pub struct SessionStore {
@@ -42,7 +46,7 @@ struct Session {
     layout: Layout,
 }
 
-/// 窗口尺寸与侧边栏宽度，所有项目窗口共用最近一次的值。
+/// 窗口尺寸、侧边栏与 Diff 的界面偏好，所有项目窗口共用最近一次的值；缺少的项按界面默认值处理。
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Layout {
@@ -50,6 +54,22 @@ pub struct Layout {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub sidebar_width: Option<u32>,
+    /// 侧边栏是否显示。
+    pub sidebar: Option<bool>,
+    /// 侧边栏当前面板，取值见 `PANELS`。
+    pub panel: Option<String>,
+    /// 提交面板是否按目录分组。
+    pub change_tree: Option<bool>,
+    /// Diff 是否使用统一视图。
+    pub unified_diff: Option<bool>,
+}
+
+/// 侧边栏与 Diff 的界面偏好。
+pub struct View {
+    pub sidebar: bool,
+    pub panel: String,
+    pub change_tree: bool,
+    pub unified_diff: bool,
 }
 
 /// 最近项目列表中的一项，按最近打开排序。
@@ -60,12 +80,15 @@ pub struct RecentProject {
     pub name: String,
 }
 
-/// 项目上次打开的标签及当前标签，路径相对项目根目录。
+/// 项目上次打开的标签、当前标签及文件树展开的目录，路径相对项目根目录。
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectTabs {
     pub tabs: Vec<String>,
     pub active: Option<String>,
+    /// 旧版会话文件没有此项，按空列表读取。
+    #[serde(default)]
+    pub expanded: Vec<String>,
 }
 
 impl Default for Session {
@@ -173,23 +196,44 @@ impl SessionStore {
         self.update(|session| session.recent.retain(|item| item.root != root))
     }
 
-    /// 记录项目当前的标签，数量和路径长度超限时拒绝。
-    pub fn save_tabs(&self, root: &str, tabs: ProjectTabs) -> AppResult<()> {
-        if tabs.tabs.len() > MAX_TABS
+    /// 记录项目当前的标签，保留展开目录；数量和路径长度超限时拒绝。
+    pub fn save_tabs(
+        &self,
+        root: &str,
+        tabs: Vec<String>,
+        active: Option<String>,
+    ) -> AppResult<()> {
+        if tabs.len() > MAX_TABS
             || tabs
-                .tabs
                 .iter()
-                .chain(tabs.active.iter())
+                .chain(active.iter())
                 .any(|path| path.len() > MAX_PATH_LENGTH)
         {
             return Err(AppError::new("SESSION", "标签记录超出限制，未保存。"));
         }
         self.update(|session| {
-            session.projects.insert(root.to_owned(), tabs);
+            let entry = session.projects.entry(root.to_owned()).or_default();
+            entry.tabs = tabs;
+            entry.active = active;
         })
     }
 
-    /// 上次记录的窗口尺寸与侧边栏宽度。
+    /// 记录项目文件树展开的目录，保留标签；数量和路径长度超限时拒绝。
+    pub fn save_expanded(&self, root: &str, expanded: Vec<String>) -> AppResult<()> {
+        if expanded.len() > MAX_EXPANDED || expanded.iter().any(|path| path.len() > MAX_PATH_LENGTH)
+        {
+            return Err(AppError::new("SESSION", "展开目录记录超出限制，未保存。"));
+        }
+        self.update(|session| {
+            session
+                .projects
+                .entry(root.to_owned())
+                .or_default()
+                .expanded = expanded;
+        })
+    }
+
+    /// 上次记录的窗口尺寸、侧边栏宽度与界面偏好。
     pub fn layout(&self) -> AppResult<Layout> {
         Ok(self.data()?.layout.clone())
     }
@@ -208,6 +252,20 @@ impl SessionStore {
             return Err(AppError::new("SESSION", "侧边栏宽度超出范围，未保存。"));
         }
         self.update(|session| session.layout.sidebar_width = Some(width))
+    }
+
+    /// 记录侧边栏与 Diff 的界面偏好；面板未知时拒绝。
+    pub fn save_view(&self, view: View) -> AppResult<()> {
+        if !PANELS.contains(&view.panel.as_str()) {
+            return Err(AppError::new("SESSION", "侧边栏面板无效，未保存。"));
+        }
+        self.update(|session| {
+            let layout = &mut session.layout;
+            layout.sidebar = Some(view.sidebar);
+            layout.panel = Some(view.panel);
+            layout.change_tree = Some(view.change_tree);
+            layout.unified_diff = Some(view.unified_diff);
+        })
     }
 
     /// 把内存中的会话写盘，用于窗口关闭时保存尺寸。

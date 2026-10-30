@@ -8,11 +8,11 @@ use crate::{
     filesystem::{self, Directory, Document},
     git::{
         self, Branches, CommitDetail, CommitResult, DiffSources, GitLocks, GitStatus, Integration,
-        LogPage, PullResult, PushResult, Side,
+        LogPage, Outgoing, PullResult, PushResult, Side,
     },
     recovery::{RecoveryEntry, RecoveryStore},
     search::{self, FileList, SearchOptions, SearchResult, Searches},
-    session::{Layout, ProjectTabs, SessionStore},
+    session::{Layout, ProjectTabs, SessionStore, View},
     settings::{Settings, SettingsStore},
     watcher::Watchers,
     window,
@@ -207,7 +207,26 @@ pub async fn save_tabs(
     let label = window.label().to_owned();
     blocking(move || {
         let root = workspaces.get(&label)?.lock()?.root_text(project_id)?;
-        sessions.save_tabs(&root, ProjectTabs { tabs, active })
+        sessions.save_tabs(&root, tabs, active)
+    })
+    .await
+}
+
+#[tauri::command]
+/// 记录当前项目文件树展开的目录，供下次打开项目时恢复。
+pub async fn save_expanded(
+    workspaces: State<'_, Workspaces>,
+    sessions: State<'_, Arc<SessionStore>>,
+    window: WebviewWindow,
+    project_id: u64,
+    expanded: Vec<String>,
+) -> AppResult<()> {
+    let workspaces = workspaces.inner().clone();
+    let sessions = sessions.inner().clone();
+    let label = window.label().to_owned();
+    blocking(move || {
+        let root = workspaces.get(&label)?.lock()?.root_text(project_id)?;
+        sessions.save_expanded(&root, expanded)
     })
     .await
 }
@@ -652,17 +671,39 @@ pub async fn git_pull(
 }
 
 #[tauri::command]
-/// 推送当前分支；没有上游时推送到 remote 并设为上游。
+/// 推送当前分支；没有上游时推送到 remote 并设为上游。head 为确认时的 HEAD 提交，已变化时拒绝。
 pub async fn git_push(
     workspaces: State<'_, Workspaces>,
     locks: State<'_, GitLocks>,
     window: WebviewWindow,
     project_id: u64,
     remote: Option<String>,
+    head: Option<String>,
 ) -> AppResult<PushResult> {
     let state = workspaces.get(window.label())?;
     let locks = locks.inner().clone();
-    blocking(move || git::push(&state, &locks, project_id, remote.as_deref())).await
+    blocking(move || {
+        git::push(
+            &state,
+            &locks,
+            project_id,
+            remote.as_deref(),
+            head.as_deref(),
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+/// 推送前预览当前分支要推送的提交；没有上游时按 remote 计算。
+pub async fn git_outgoing(
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
+    project_id: u64,
+    remote: Option<String>,
+) -> AppResult<Outgoing> {
+    let state = workspaces.get(window.label())?;
+    blocking(move || git::outgoing(&state, project_id, remote.as_deref())).await
 }
 
 #[tauri::command]
@@ -800,7 +841,7 @@ pub async fn save_settings(
 }
 
 #[tauri::command]
-/// 上次记录的窗口尺寸与侧边栏宽度。
+/// 上次记录的窗口尺寸、侧边栏宽度与界面偏好。
 pub fn get_layout(sessions: State<'_, Arc<SessionStore>>) -> AppResult<Layout> {
     sessions.layout()
 }
@@ -812,6 +853,27 @@ pub async fn save_sidebar_width(
 ) -> AppResult<()> {
     let sessions = sessions.inner().clone();
     blocking(move || sessions.save_sidebar_width(width)).await
+}
+
+#[tauri::command]
+/// 记录侧边栏显示、当前面板、变更列表分组与 Diff 视图偏好。
+pub async fn save_view(
+    sessions: State<'_, Arc<SessionStore>>,
+    sidebar: bool,
+    panel: String,
+    change_tree: bool,
+    unified_diff: bool,
+) -> AppResult<()> {
+    let sessions = sessions.inner().clone();
+    blocking(move || {
+        sessions.save_view(View {
+            sidebar,
+            panel,
+            change_tree,
+            unified_diff,
+        })
+    })
+    .await
 }
 
 #[tauri::command]

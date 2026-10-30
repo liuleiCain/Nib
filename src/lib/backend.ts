@@ -32,10 +32,11 @@ export interface Document {
   size: number;
 }
 
-/** 项目上次打开的标签，路径相对项目根目录。 */
+/** 项目上次打开的标签与文件树展开的目录，路径相对项目根目录。 */
 export interface ProjectTabs {
   tabs: string[];
   active: string | null;
+  expanded: string[];
 }
 
 /** 在当前窗口打开项目的结果；项目已在其他窗口打开时只切换窗口。 */
@@ -140,6 +141,22 @@ export interface CommitSummary {
   time: number;
   subject: string;
   refs: CommitRef[];
+}
+
+/** 推送前的预览：推送目标与本地有、远程记录中没有的提交。 */
+export interface Outgoing {
+  branch: string;
+  /** 预览时的 HEAD 提交。 */
+  head: string;
+  /** 已设置的上游；为空时推送到 remote 并设为上游。 */
+  upstream: string | null;
+  remote: string;
+  remotes: string[];
+  /** 远程分支在本地记录中不存在，推送将新建分支。 */
+  newBranch: boolean;
+  /** 新的在前，最多 1,000 个。 */
+  commits: CommitSummary[];
+  total: number;
 }
 
 export interface LogPage {
@@ -263,11 +280,28 @@ export interface Settings {
   autoSave: boolean;
 }
 
-/** 上次记录的窗口尺寸与侧边栏宽度。 */
+/** 侧边栏面板。 */
+export type SidebarPanel = 'files' | 'commit' | 'log' | 'search';
+
+/** 侧边栏与 Diff 的界面偏好。 */
+export interface View {
+  sidebar: boolean;
+  panel: SidebarPanel;
+  /** 提交面板按目录分组。 */
+  changeTree: boolean;
+  /** Diff 使用统一视图。 */
+  unifiedDiff: boolean;
+}
+
+/** 上次记录的窗口尺寸、侧边栏宽度与界面偏好；未记录的项为 null。 */
 export interface Layout {
   width: number | null;
   height: number | null;
   sidebarWidth: number | null;
+  sidebar: boolean | null;
+  panel: SidebarPanel | null;
+  changeTree: boolean | null;
+  unifiedDiff: boolean | null;
 }
 
 /** 上次未正常关闭时留下的未保存内容。 */
@@ -300,6 +334,8 @@ export const backend = {
   forgetProject: (root: string) => invoke<void>('forget_project', { root }),
   saveTabs: (projectId: number, tabs: string[], active: string | null) =>
     invoke<void>('save_tabs', { projectId, tabs, active }),
+  saveExpanded: (projectId: number, expanded: string[]) =>
+    invoke<void>('save_expanded', { projectId, expanded }),
   cancelQuit: () => invoke<void>('cancel_quit'),
   listDirectory: (projectId: number, path: string) =>
     invoke<Directory>('list_directory', { projectId, path }),
@@ -396,8 +432,12 @@ export const backend = {
   gitPull: (projectId: number) =>
     invoke<{ upstream: string; commits: number }>('git_pull', { projectId }),
   /** 推送当前分支；没有上游时需指定 remote，推送后设为上游。 */
-  gitPush: (projectId: number, remote: string | null) =>
-    invoke<{ upstream: string }>('git_push', { projectId, remote }),
+  /** 推送前预览当前分支要推送的提交；remote 仅在没有上游时生效，为空时优先 origin。 */
+  gitOutgoing: (projectId: number, remote: string | null) =>
+    invoke<Outgoing>('git_outgoing', { projectId, remote }),
+  /** head 为确认时的 HEAD 提交，已变化时返回 PUSH_CHANGED 错误。 */
+  gitPush: (projectId: number, remote: string | null, head: string | null) =>
+    invoke<{ upstream: string }>('git_push', { projectId, remote, head }),
   /** 把目标分支（完整引用名）合并到当前分支；要求没有未提交的修改。 */
   gitMerge: (projectId: number, target: string) =>
     invoke<Integration>('git_merge', { projectId, target }),
@@ -428,6 +468,7 @@ export const backend = {
   getLayout: () => invoke<Layout>('get_layout'),
   saveSidebarWidth: (width: number) =>
     invoke<void>('save_sidebar_width', { width }),
+  saveView: (view: View) => invoke<void>('save_view', { ...view }),
   recoverySave: (
     projectId: number,
     path: string,

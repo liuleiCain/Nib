@@ -10,7 +10,7 @@ import {
   LoaderCircle,
   RotateCw,
 } from 'lucide-react';
-import { backend, errorMessage } from '../../lib/backend';
+import { backend, errorCode, errorMessage } from '../../lib/backend';
 import { changeStyle } from '../git/CommitPanel';
 import type { TreeShortcut } from './ContextMenu';
 import { shortcut } from './ContextMenu';
@@ -50,6 +50,10 @@ interface Props {
   /** 右键菜单作用的条目，高亮显示。 */
   marked: string | null;
   reveal: TreeReveal;
+  /** 挂载时展开的目录（不含项目根目录）。 */
+  initialExpanded: string[];
+  /** 展开的目录变化后回调，不含项目根目录。 */
+  onExpanded: (paths: string[]) => void;
   onOpen: (path: string) => void;
   onContextMenu: (target: TreeTarget, x: number, y: number) => void;
   onShortcut: (target: TreeTarget, shortcut: TreeShortcut) => void;
@@ -70,15 +74,20 @@ export function Explorer({
   gitDirs,
   marked,
   reveal,
+  initialExpanded,
+  onExpanded,
   onOpen,
   onContextMenu,
   onShortcut,
 }: Props) {
   const [branches, setBranches] = useState<Record<string, Branch>>({});
-  const [expanded, setExpanded] = useState(new Set(['']));
+  const [expanded, setExpanded] = useState(
+    () => new Set(['', ...initialExpanded]),
+  );
   const generation = useRef(0);
   const requests = useRef(new Set<string>());
   const stale = useRef(new Set<string>());
+  const mounted = useRef(false);
 
   async function load(path: string) {
     // 读取期间又有变化时，完成后再读一次，保证显示最新内容。
@@ -97,7 +106,16 @@ export function Explorer({
       if (generation.current === current)
         setBranches((previous) => ({ ...previous, [path]: { directory } }));
     } catch (error) {
-      if (generation.current === current)
+      if (generation.current !== current) return;
+      // 目录已不存在时不再记为展开，避免恢复记录中残留失效路径。
+      if (path && errorCode(error) === 'NOT_FOUND') {
+        setBranches(({ [path]: _, ...rest }) => rest);
+        setExpanded((previous) => {
+          const next = new Set(previous);
+          next.delete(path);
+          return next;
+        });
+      } else
         setBranches((previous) => ({
           ...previous,
           [path]: { error: errorMessage(error) },
@@ -111,7 +129,7 @@ export function Explorer({
   }
 
   useEffect(() => {
-    void load('');
+    for (const path of expanded) void load(path);
     return () => {
       generation.current++;
       requests.current.clear();
@@ -119,6 +137,15 @@ export function Explorer({
     };
     // 此组件按项目 id 重新挂载，防止跨项目共享目录缓存。
   }, []);
+
+  // 挂载后展开状态每次变化都通知上层记录。
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    onExpanded([...expanded].filter(Boolean));
+  }, [expanded]);
 
   // 变化路径的父目录和自身若已加载则重读；折叠目录的缓存也一并更新。
   useEffect(() => {

@@ -54,6 +54,8 @@ import type {
   RecentProject,
   RecoveryEntry,
   Settings,
+  SidebarPanel,
+  View,
 } from '../lib/backend';
 import { backend, desktop, errorCode, errorMessage } from '../lib/backend';
 import { Editor } from '../features/editor/Editor';
@@ -87,6 +89,7 @@ import type { Reveal } from '../features/editor/Editor';
 import { QuickOpen } from '../features/search/QuickOpen';
 import { SearchPanel } from '../features/search/SearchPanel';
 import { DiffView } from '../features/git/DiffView';
+import { PushDialog } from '../features/git/PushDialog';
 import { setHeadDoc } from '../features/git/changes';
 import { Text } from '@codemirror/state';
 
@@ -240,6 +243,8 @@ const RECOVERY_DELAY = 1500;
 const MAX_RECOVERY_LENGTH = 1_500_000;
 /** 设置变化后写盘的等待时间，连续调整字号只写一次。 */
 const SETTINGS_DELAY = 300;
+/** 每个项目最多记录的展开目录数，与后台上限一致。 */
+const MAX_EXPANDED = 200;
 /** 编辑器字体为空时使用的内置字体。 */
 const DEFAULT_EDITOR_FONT =
   "'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace";
@@ -317,9 +322,15 @@ export function App() {
   const viewRef = useRef<EditorView | null>(null);
   const paletteRef = useRef<HTMLInputElement>(null);
   // Git：侧边栏视图、仓库状态、勾选的文件、提交信息与 Diff 标签。
-  const [panel, setPanel] = useState<'files' | 'commit' | 'log' | 'search'>(
-    'files',
-  );
+  const [panel, setPanel] = useState<SidebarPanel>('files');
+  // 提交面板按目录分组显示。
+  const [changeTree, setChangeTree] = useState(false);
+  // 当前项目文件树展开的目录，随项目恢复。
+  const [expanded, setExpanded] = useState<string[]>([]);
+  // 界面偏好读取完成前不写盘，避免用默认值覆盖已保存的记录。
+  const viewLoaded = useRef(false);
+  const savedView = useRef('');
+  const expandedTimer = useRef<number | null>(null);
   const [git, setGit] = useState<GitStatus | null>(null);
   const gitRef = useRef<GitStatus | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
@@ -356,6 +367,9 @@ export function App() {
   } | null>(null);
   const [naming, setNamingState] = useState<NameRequest | null>(null);
   const namingRef = useRef<NameRequest | null>(null);
+  // 推送确认框，打开时记录项目 id，切换项目后不再显示。
+  const [pushing, setPushingState] = useState<number | null>(null);
+  const pushingRef = useRef<number | null>(null);
   const [treeReveal, setTreeReveal] = useState<TreeReveal>({
     key: 0,
     path: '',
@@ -1056,6 +1070,11 @@ export function App() {
     setNamingState(request);
   }
 
+  function setPushing(projectId: number | null) {
+    pushingRef.current = projectId;
+    setPushingState(projectId);
+  }
+
   /** 项目内的路径前缀判断：path 等于 base，或位于 base 目录之内。 */
   function within(path: string, base: string) {
     return base === '' || path === base || path.startsWith(`${base}/`);
@@ -1083,7 +1102,8 @@ export function App() {
       Boolean(projectRef.current) &&
       !busyRef.current &&
       !promptRef.current &&
-      !namingRef.current
+      !namingRef.current &&
+      pushingRef.current === null
     );
   }
 
@@ -1916,14 +1936,14 @@ export function App() {
   }
 
   /** 执行分支弹窗中选择的操作。 */
-  function branchAction(action: BranchAction, x: number, y: number) {
+  function branchAction(action: BranchAction) {
     switch (action.kind) {
       case 'fetch':
         return fetchRemote();
       case 'pull':
         return void pullRemote();
       case 'push':
-        return void pushRemote(x, y);
+        return pushRemote();
       case 'create':
         return createBranch(action.start, action.label);
       case 'switch':
@@ -2113,51 +2133,28 @@ export function App() {
   }
 
   /**
-   * 推送当前分支。没有上游时在锚点处列出远程仓库，选择后推送并设为上游；
+   * 推送前打开确认框，列出待推送的提交与文件；没有上游时在框内选择远程仓库，推送后设为上游。
    * 被拒绝时说明原因，不提供强制推送。
    */
-  async function pushRemote(x?: number, y?: number) {
+  function pushRemote() {
     const workspace = projectRef.current;
     const status = gitRef.current;
     if (!workspace || status?.kind !== 'repository' || remoteTaskRef.current)
       return;
+    if (!idle()) return;
     if (!status.branch) {
       notify('当前处于游离 HEAD，没有可推送的分支。');
       return;
     }
-    const push = (remote: string | null) =>
-      void runRemote('推送', async (projectId) => {
-        const result = await backend.gitPush(projectId, remote);
-        return `已推送到 ${result.upstream}`;
-      });
-    if (status.upstream) {
-      push(null);
-      return;
-    }
-    let remotes: string[];
-    try {
-      remotes = (await backend.gitBranches(workspace.id)).remotes.map(
-        (remote) => remote.name,
-      );
-    } catch (error) {
-      notify(`推送失败：${errorMessage(error)}`);
-      return;
-    }
-    if (projectRef.current?.id !== workspace.id) return;
-    if (!remotes.length) {
-      notify('仓库没有配置远程仓库，可在分支弹窗的“远程仓库”中添加后再推送。');
-      return;
-    }
-    const branch = status.branch;
-    setMenu({
-      items: () =>
-        remotes.map((remote) => ({
-          label: `推送到 ${remote}/${branch} 并设为上游`,
-          action: () => push(remote),
-        })),
-      marked: null,
-      x: x ?? window.innerWidth / 2 - 120,
-      y: y ?? 120,
+    setPushing(workspace.id);
+  }
+
+  /** 确认框中确认后推送；remote 仅在没有上游时传入，head 为确认时的 HEAD 提交。 */
+  function confirmPush(remote: string | null, head: string) {
+    setPushing(null);
+    void runRemote('推送', async (projectId) => {
+      const result = await backend.gitPush(projectId, remote, head);
+      return `已推送到 ${result.upstream}`;
     });
   }
 
@@ -2256,10 +2253,36 @@ export function App() {
     setCommitMessage('');
     updateDiffs([]);
     setBranchPopup(null);
+    setPushing(null);
   }
 
-  /** 在当前窗口打开项目；调用方负责处理当前项目的未保存内容。 */
-  async function loadProject(path: string) {
+  /** 切换或关闭项目时放弃上一个项目尚未写盘的展开记录。 */
+  function clearExpandedTimer() {
+    if (expandedTimer.current !== null)
+      window.clearTimeout(expandedTimer.current);
+    expandedTimer.current = null;
+  }
+
+  /** 记录文件树展开的目录，停止变化后写盘。 */
+  function persistExpanded(paths: string[]) {
+    setExpanded(paths);
+    const workspace = projectRef.current;
+    if (!desktop || !workspace) return;
+    if (expandedTimer.current !== null)
+      window.clearTimeout(expandedTimer.current);
+    expandedTimer.current = window.setTimeout(() => {
+      expandedTimer.current = null;
+      backend
+        .saveExpanded(workspace.id, paths.slice(0, MAX_EXPANDED))
+        .catch((error) => {
+          if (projectRef.current?.id === workspace.id)
+            notify(`展开目录记录保存失败：${errorMessage(error)}`);
+        });
+    }, 400);
+  }
+
+  /** 在当前窗口打开项目；调用方负责处理当前项目的未保存内容。启动恢复时不强制显示侧边栏。 */
+  async function loadProject(path: string, showSidebar = true) {
     const result = await backend.openProject(path);
     if (result.kind === 'focused') return;
     const next = result.project;
@@ -2270,13 +2293,15 @@ export function App() {
     recoveryClosed.current = false;
     setQuickOpen(false);
     projectRef.current = next;
+    clearExpandedTimer();
+    setExpanded(result.tabs.expanded);
     setProject(next);
     resetGit();
     updateTabs([]);
     activate(null);
     setOpening(null);
     setNotice(result.warning ? { text: result.warning, error: true } : null);
-    setSidebar(true);
+    if (showSidebar) setSidebar(true);
     setWindowTitle(next);
     refreshRecent();
     void refreshGit(null);
@@ -2337,6 +2362,8 @@ export function App() {
       desiredFile.current = null;
       restoring.current = false;
       projectRef.current = null;
+      clearExpandedTimer();
+      setExpanded([]);
       setProject(null);
       resetGit();
       updateTabs([]);
@@ -2840,7 +2867,7 @@ export function App() {
     {
       label: '推送 (Push)',
       detail: 'Git',
-      action: () => void pushRemote(),
+      action: pushRemote,
       disabled: !repository || Boolean(remoteTask),
     },
     {
@@ -3078,11 +3105,46 @@ export function App() {
           setSidebarWidth(layout.sidebarWidth);
         }
         sidebarLoaded.current = true;
+        const view: View = {
+          sidebar: layout.sidebar ?? true,
+          panel: layout.panel ?? 'files',
+          changeTree: layout.changeTree ?? false,
+          unifiedDiff: layout.unifiedDiff ?? false,
+        };
+        setSidebar(view.sidebar);
+        setPanel(view.panel);
+        setChangeTree(view.changeTree);
+        setUnified(view.unifiedDiff);
+        savedView.current = JSON.stringify(view);
+        viewLoaded.current = true;
       })
       .catch(() => {
         sidebarLoaded.current = true;
+        viewLoaded.current = true;
       });
   }, []);
+
+  // 侧边栏与 Diff 偏好停止变化后写盘。
+  useEffect(() => {
+    if (!desktop || !viewLoaded.current) return;
+    const view: View = {
+      sidebar,
+      panel,
+      changeTree,
+      unifiedDiff: unified,
+    };
+    const key = JSON.stringify(view);
+    if (key === savedView.current) return;
+    const timer = window.setTimeout(() => {
+      backend
+        .saveView(view)
+        .then(() => {
+          savedView.current = key;
+        })
+        .catch((error) => notify(`界面偏好保存失败：${errorMessage(error)}`));
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [sidebar, panel, changeTree, unified]);
 
   // 设置变化后稍后写盘；保存失败时退回上次保存的设置。
   useEffect(() => {
@@ -3176,7 +3238,11 @@ export function App() {
     const listener = (event: KeyboardEvent) => {
       if (event.isComposing || !(mac ? event.metaKey : event.ctrlKey)) return;
       const key = event.key.toLowerCase();
-      if (promptRef.current || namingRef.current) {
+      if (
+        promptRef.current ||
+        namingRef.current ||
+        pushingRef.current !== null
+      ) {
         if (['s', 'w', 'o', 'p', 'b', 'n', 'k', 'f'].includes(key))
           event.preventDefault();
         return;
@@ -3323,7 +3389,7 @@ export function App() {
       setBusy('打开项目');
       try {
         const root = await backend.windowStartup();
-        if (root) await loadProject(root);
+        if (root) await loadProject(root, false);
       } catch (error) {
         notify(errorMessage(error));
         refreshRecent();
@@ -3533,7 +3599,9 @@ export function App() {
                   remoteTask={remoteTask}
                   onBranches={openBranches}
                   onPull={() => void pullRemote()}
-                  onPush={(x, y) => void pushRemote(x, y)}
+                  onPush={pushRemote}
+                  tree={changeTree}
+                  onTree={setChangeTree}
                   onResolve={(paths) => void resolveConflicts(paths)}
                   onContinue={() => void continueOperation()}
                   onSkip={() => void skipCommit()}
@@ -3571,6 +3639,8 @@ export function App() {
                   gitDirs={gitDirs}
                   marked={menu?.marked ?? null}
                   reveal={treeReveal}
+                  initialExpanded={expanded}
+                  onExpanded={persistExpanded}
                   onOpen={(path) => void openFile(path)}
                   onContextMenu={(target, x, y) => {
                     if (idle())
@@ -3647,9 +3717,10 @@ export function App() {
               onPointerDown={(event) => {
                 const target = event.currentTarget;
                 target.setPointerCapture(event.pointerId);
+                // 缩放或高分屏下 clientX 可能为小数，后端按整数像素保存
                 const move = (pointer: PointerEvent) =>
                   setSidebarWidth(
-                    Math.max(180, Math.min(420, pointer.clientX)),
+                    Math.max(180, Math.min(420, Math.round(pointer.clientX))),
                   );
                 const stop = () => {
                   target.removeEventListener('pointermove', move);
@@ -4273,9 +4344,14 @@ export function App() {
           y={branchPopup.y}
           remoteTask={remoteTask}
           onClose={() => setBranchPopup(null)}
-          onAction={(action) =>
-            branchAction(action, branchPopup.x, branchPopup.y)
-          }
+          onAction={branchAction}
+        />
+      )}
+      {pushing !== null && project?.id === pushing && (
+        <PushDialog
+          projectId={pushing}
+          onPush={confirmPush}
+          onClose={() => setPushing(null)}
         />
       )}
       {naming && !prompt && (

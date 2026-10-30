@@ -1979,6 +1979,161 @@ button.commit-branch svg:last-child {
   color: #d9a98f;
 }
 
+/* 推送确认框：左侧待推送的提交，右侧选中提交的文件或文件 Diff */
+.push-dialog {
+  width: min(920px, calc(100vw - 40px));
+  height: min(620px, calc(100vh - 40px));
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+}
+.unsaved-dialog.push-dialog h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+.push-dialog h2 svg {
+  color: var(--accent);
+}
+.push-target {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: #7f8b92;
+  font-size: 12px;
+}
+.push-target label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.push-target select {
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid #48544f;
+  border-radius: 3px;
+  background: #1b2024;
+  color: var(--text);
+  font-size: 12px;
+}
+.push-target select:focus {
+  border-color: #6a8175;
+  outline: none;
+}
+.push-branch {
+  color: #c9d5d2;
+  font-family: var(--editor-font);
+}
+.push-tag {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: #4c6b8c;
+  color: #e3ebf3;
+  font-size: 10px;
+  line-height: 16px;
+}
+.push-hint {
+  color: #66737b;
+  font-size: 11px;
+}
+.push-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  border: 1px solid #ffffff10;
+  border-radius: 4px;
+  background: var(--panel);
+}
+.push-commits {
+  width: 42%;
+  flex-shrink: 0;
+  overflow: auto;
+  border-right: 1px solid #ffffff10;
+}
+.push-commits .log-row {
+  padding-left: 10px;
+}
+.push-commits .log-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.push-files {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.push-files .change-row {
+  padding-left: 12px;
+  flex-shrink: 0;
+}
+.unsaved-dialog .push-note,
+.unsaved-dialog .push-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 12px;
+  color: #6f7c84;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.unsaved-dialog .push-meta {
+  padding-top: 0;
+  font-size: 10px;
+}
+.unsaved-dialog .push-note.error {
+  color: #d9a98f;
+}
+.push-message {
+  margin: 0;
+  padding: 10px 12px 6px;
+  color: #c3ced0;
+  font-family: var(--ui-font);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 120px;
+  overflow: auto;
+  flex-shrink: 0;
+}
+.push-diff {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.push-diff .diff-view {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+.push-back {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  padding: 6px 10px;
+  color: #8d999f;
+}
+.push-back:hover {
+  color: var(--text);
+}
+.unsaved-dialog p.push-footnote {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 10px 0 12px;
+  color: #66737b;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 /* 快速打开 */
 .palette-results > button.quick-open-item {
   justify-content: flex-start;

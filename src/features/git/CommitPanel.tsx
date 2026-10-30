@@ -66,8 +66,11 @@ interface Props {
   /** 在锚点处打开分支弹窗。 */
   onBranches: (x: number, y: number) => void;
   onPull: () => void;
-  /** 推送；未设置上游时在锚点处选择远程仓库。 */
-  onPush: (x: number, y: number) => void;
+  /** 打开推送确认框。 */
+  onPush: () => void;
+  /** 按目录分组显示，否则平铺。 */
+  tree: boolean;
+  onTree: (tree: boolean) => void;
   /** 把冲突文件标记为已解决。 */
   onResolve: (paths: string[]) => void;
   /** 合并或变基时：完成合并或继续变基。 */
@@ -116,12 +119,13 @@ export function CommitPanel({
   onBranches,
   onPull,
   onPush,
+  tree,
+  onTree,
   onResolve,
   onContinue,
   onSkip,
   onAbort,
 }: Props) {
-  const [tree, setTree] = useState(false);
   const [collapsed, setCollapsed] = useState(new Set<string>());
   const repository = status?.kind === 'repository' ? status : null;
 
@@ -375,10 +379,7 @@ export function CommitPanel({
           title={`推送${repository.upstream ? ` · ${repository.upstream}` : '（未设置上游）'}`}
           aria-label="推送"
           disabled={Boolean(remoteTask)}
-          onClick={(event) => {
-            const rect = event.currentTarget.getBoundingClientRect();
-            onPush(rect.left, rect.bottom);
-          }}
+          onClick={onPush}
         >
           {remoteTask === '推送' ? (
             <LoaderCircle size={13} className="spin" />
@@ -390,7 +391,7 @@ export function CommitPanel({
           className="icon-button"
           title={tree ? '平铺显示' : '按目录分组'}
           aria-label={tree ? '平铺显示' : '按目录分组'}
-          onClick={() => setTree((value) => !value)}
+          onClick={() => onTree(!tree)}
         >
           {tree ? <List size={14} /> : <FolderTree size={14} />}
         </button>

@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use super::{
     blob_side, checked, failure, lines, project_root, repo_info, run, ChangeKind, DiffSources,
-    Side, ERROR_LIMIT, MAX_FILES, READ_TIMEOUT, STATUS_LIMIT,
+    Output, Side, ERROR_LIMIT, MAX_FILES, READ_TIMEOUT, STATUS_LIMIT,
 };
 use crate::{
     error::{AppError, AppResult},
@@ -16,9 +16,11 @@ use crate::{
 /// 每页提交数，前端按需加载下一页。
 const PAGE_SIZE: usize = 100;
 /// 一页提交记录的输出上限。
-const LOG_LIMIT: usize = 4 * 1024 * 1024;
+pub(super) const LOG_LIMIT: usize = 4 * 1024 * 1024;
 /// 提交信息的输出上限。
 const MESSAGE_LIMIT: usize = 1024 * 1024;
+/// 列表中每个提交的字段，配合 `log -z` 使用，由 [`parse_log`] 解析。
+pub(super) const LOG_FORMAT: &str = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%D";
 
 /// 列表中的一个提交。
 #[derive(Serialize)]
@@ -145,7 +147,7 @@ pub fn log(state: &WorkspaceState, id: u64, skip: usize) -> AppResult<LogPage> {
             "-z",
             "--no-color",
             "--decorate=full",
-            "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%D",
+            LOG_FORMAT,
             &count,
             &skip,
             "HEAD",
@@ -159,6 +161,14 @@ pub fn log(state: &WorkspaceState, id: u64, skip: usize) -> AppResult<LogPage> {
     if !output.success {
         return Err(failure(&output));
     }
+    let mut commits = parse_log(&output);
+    let more = commits.len() > PAGE_SIZE || output.truncated;
+    commits.truncate(PAGE_SIZE);
+    Ok(LogPage { commits, more })
+}
+
+/// 解析 `log -z --decorate=full` 按 [`LOG_FORMAT`] 输出的提交列表。
+pub(super) fn parse_log(output: &Output) -> Vec<CommitSummary> {
     let text = String::from_utf8_lossy(&output.stdout);
     let mut records: Vec<&str> = text.split('\0').filter(|item| !item.is_empty()).collect();
     // 输出被截断时最后一条可能不完整。
@@ -181,9 +191,7 @@ pub fn log(state: &WorkspaceState, id: u64, skip: usize) -> AppResult<LogPage> {
             refs: parse_refs(refs),
         });
     }
-    let more = commits.len() > PAGE_SIZE || output.truncated;
-    commits.truncate(PAGE_SIZE);
-    Ok(LogPage { commits, more })
+    commits
 }
 
 /// 第一个父提交；根提交返回空。
