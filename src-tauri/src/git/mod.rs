@@ -15,6 +15,17 @@ use crate::{
     workspace::WorkspaceState,
 };
 
+mod history;
+mod merge;
+mod remote;
+
+pub use history::{commit_detail, commit_diff, log, CommitDetail, LogPage};
+pub use merge::{abort, merge, proceed, rebase, resolve, skip, Integration};
+pub use remote::{
+    branches, checkout_remote, create_branch, delete_branch, delete_remote_branch, fetch, pull,
+    push, rename_branch, switch_branch, Branches, PullResult, PushResult,
+};
+
 /// 读取类命令的超时；超时后结束进程并提示。
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
 /// 提交可能运行钩子（格式化、检查），给足时间；超时后结果未知，不自动重试。
@@ -552,7 +563,12 @@ fn side(bytes: Vec<u8>, truncated: bool) -> Side {
 
 /// HEAD 中的文件内容，按仓库的换行和过滤规则转换为工作区形式。
 fn head_side(root: &Path, path: &str) -> AppResult<Side> {
-    let spec = format!("HEAD:./{}", checked(path)?);
+    blob_side(root, "HEAD", path)
+}
+
+/// 指定版本中的文件内容；revision 须为 HEAD 或已校验的提交哈希。
+fn blob_side(root: &Path, revision: &str, path: &str) -> AppResult<Side> {
+    let spec = format!("{revision}:./{}", checked(path)?);
     // 先确认对象类型：不存在（含尚无提交）时为新文件，子模块等非文件对象不显示内容。
     let kind = run(
         root,
@@ -566,7 +582,7 @@ fn head_side(root: &Path, path: &str) -> AppResult<Side> {
     }
     if lines(&kind.stdout).first().map(String::as_str) != Some("blob") {
         return Ok(Side::Unsupported {
-            message: "此路径在 HEAD 中不是普通文件（如子模块），暂不显示 Diff。".to_owned(),
+            message: "此路径在该版本中不是普通文件（如子模块），暂不显示 Diff。".to_owned(),
         });
     }
     let output = run(
@@ -659,9 +675,7 @@ pub fn commit(
     if let Some(operation) = operation(&info.git_dir) {
         return Err(AppError::new(
             "COMMIT",
-            format!(
-                "仓库正在进行{operation}，Nib 暂不支持在此状态下提交。请在终端完成或中止后重试。"
-            ),
+            format!("仓库正在进行{operation}，Nib 暂不支持在此状态下提交。请先完成或中止后重试。"),
         ));
     }
     let pathspec = ["--pathspec-from-file=-", "--pathspec-file-nul"];
@@ -741,7 +755,9 @@ pub fn restore(state: &WorkspaceState, locks: &GitLocks, id: u64, path: &str) ->
     if let Some(operation) = operation(&info.git_dir) {
         return Err(AppError::new(
             "RESTORE",
-            format!("仓库正在进行{operation}，Nib 暂不支持在此状态下恢复文件。请在终端完成或中止后重试。"),
+            format!(
+                "仓库正在进行{operation}，Nib 暂不支持在此状态下恢复文件。请先完成或中止后重试。"
+            ),
         ));
     }
     // 持锁后再确认文件仍不存在，避免覆盖确认期间重新出现的文件。
@@ -864,7 +880,9 @@ fn write_guard(
     if let Some(operation) = operation(&info.git_dir) {
         return Err(AppError::new(
             "GIT",
-            format!("仓库正在进行{operation}，Nib 暂不支持在此状态下{action}。请在终端完成或中止后重试。"),
+            format!(
+                "仓库正在进行{operation}，Nib 暂不支持在此状态下{action}。请先完成或中止后重试。"
+            ),
         ));
     }
     let lock = locks.get(&info.top)?;
@@ -1125,7 +1143,7 @@ pub fn rename(
     if let Some(operation) = operation(&info.git_dir) {
         return Err(AppError::new(
             "GIT",
-            format!("仓库正在进行{operation}，Nib 暂不支持在此状态下重命名已跟踪的文件。请在终端完成或中止后重试。"),
+            format!("仓库正在进行{operation}，Nib 暂不支持在此状态下重命名已跟踪的文件。请先完成或中止后重试。"),
         ));
     }
     // 目标已存在时 git mv 会拒绝，不加 -f。

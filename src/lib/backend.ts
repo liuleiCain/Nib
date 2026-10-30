@@ -89,6 +89,19 @@ export interface Repository {
   truncated: boolean;
 }
 
+/** 合并、变基、继续或跳过的结果；stopped 时仓库停在进行中的状态。 */
+export type Integration =
+  | { kind: 'upToDate' }
+  | { kind: 'done'; hash: string }
+  | {
+      kind: 'stopped';
+      /** 未解决冲突的文件（相对项目根目录），最多列出 20 个。 */
+      files: string[];
+      total: number;
+      /** 没有冲突时 Git 给出的停止原因。 */
+      message: string | null;
+    };
+
 export type GitStatus =
   | { kind: 'unavailable'; message: string }
   | { kind: 'notRepository' }
@@ -110,6 +123,86 @@ export interface DiffSources {
 export interface CommitResult {
   hash: string;
   summary: string;
+}
+
+/** 指向提交的引用：head 为当前分支。 */
+export interface CommitRef {
+  name: string;
+  kind: 'head' | 'branch' | 'remote' | 'tag';
+}
+
+/** 提交记录中的一个提交；time 为 Unix 秒。 */
+export interface CommitSummary {
+  hash: string;
+  parents: string[];
+  author: string;
+  email: string;
+  time: number;
+  subject: string;
+  refs: CommitRef[];
+}
+
+export interface LogPage {
+  commits: CommitSummary[];
+  /** 还有更早的提交。 */
+  more: boolean;
+}
+
+/** 提交中变更的文件，路径相对项目根目录。 */
+export interface CommitFile {
+  path: string;
+  original: string | null;
+  kind: ChangeKind;
+}
+
+/** 提交详情；合并提交的文件与第一个父提交比较。 */
+export interface CommitDetail {
+  hash: string;
+  parents: string[];
+  author: string;
+  email: string;
+  time: number;
+  committer: string;
+  commitTime: number;
+  message: string;
+  files: CommitFile[];
+  truncated: boolean;
+}
+
+export interface LocalBranch {
+  name: string;
+  current: boolean;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  /** 上游分支已在远程删除。 */
+  gone: boolean;
+  time: number;
+}
+
+/** 远程仓库；地址中的密码已隐藏。 */
+export interface Remote {
+  name: string;
+  url: string;
+}
+
+/** 本地记录的远程分支，获取后更新。 */
+export interface RemoteBranch {
+  /** 显示名，如 origin/feature/x。 */
+  name: string;
+  remote: string;
+  /** 远程仓库中的分支名。 */
+  branch: string;
+  time: number;
+}
+
+export interface Branches {
+  current: string | null;
+  local: LocalBranch[];
+  remoteBranches: RemoteBranch[];
+  /** 远程分支过多，只返回了前一部分。 */
+  remoteTruncated: boolean;
+  remotes: Remote[];
 }
 
 /** 统一提取后台结构化错误与运行时异常的可读说明。 */
@@ -185,6 +278,65 @@ export const backend = {
   /** 回滚变更：修改与删除恢复为 HEAD，重命名恢复原路径，新增取消加入版本控制。 */
   gitRollback: (projectId: number, paths: string[]) =>
     invoke<void>('git_rollback', { projectId, paths }),
+  /** 当前分支的一页提交记录，skip 为已加载的数量。 */
+  gitLog: (projectId: number, skip: number) =>
+    invoke<LogPage>('git_log', { projectId, skip }),
+  gitCommitDetail: (projectId: number, commit: string) =>
+    invoke<CommitDetail>('git_commit_detail', { projectId, commit }),
+  /** 提交中一个文件相对第一个父提交的两侧内容。 */
+  gitCommitDiff: (
+    projectId: number,
+    commit: string,
+    path: string,
+    original: string | null,
+  ) =>
+    invoke<DiffSources>('git_commit_diff', {
+      projectId,
+      commit,
+      path,
+      original,
+    }),
+  gitBranches: (projectId: number) =>
+    invoke<Branches>('git_branches', { projectId }),
+  /** 新建分支并切换过去；start 为起点分支的完整引用名，为空时从当前 HEAD 新建。返回分支名。 */
+  gitCreateBranch: (projectId: number, name: string, start: string | null) =>
+    invoke<string>('git_create_branch', { projectId, name, start }),
+  /** 检出远程分支为跟踪它的本地分支；返回本地分支名。 */
+  gitCheckoutRemote: (projectId: number, remote: string, branch: string) =>
+    invoke<string>('git_checkout_remote', { projectId, remote, branch }),
+  gitRenameBranch: (projectId: number, name: string, target: string) =>
+    invoke<string>('git_rename_branch', { projectId, name, target }),
+  /** 删除本地分支；未合并时返回 NOT_MERGED 错误，确认后以 force 重试。 */
+  gitDeleteBranch: (projectId: number, name: string, force: boolean) =>
+    invoke<void>('git_delete_branch', { projectId, name, force }),
+  gitDeleteRemoteBranch: (projectId: number, remote: string, branch: string) =>
+    invoke<void>('git_delete_remote_branch', { projectId, remote, branch }),
+  gitSwitchBranch: (projectId: number, name: string) =>
+    invoke<void>('git_switch_branch', { projectId, name }),
+  gitFetch: (projectId: number) => invoke<void>('git_fetch', { projectId }),
+  /** 仅快进拉取当前分支的上游；commits 为 0 表示已是最新。 */
+  gitPull: (projectId: number) =>
+    invoke<{ upstream: string; commits: number }>('git_pull', { projectId }),
+  /** 推送当前分支；没有上游时需指定 remote，推送后设为上游。 */
+  gitPush: (projectId: number, remote: string | null) =>
+    invoke<{ upstream: string }>('git_push', { projectId, remote }),
+  /** 把目标分支（完整引用名）合并到当前分支；要求没有未提交的修改。 */
+  gitMerge: (projectId: number, target: string) =>
+    invoke<Integration>('git_merge', { projectId, target }),
+  /** 把当前分支变基到目标分支（完整引用名）；要求没有未提交的修改。 */
+  gitRebase: (projectId: number, target: string) =>
+    invoke<Integration>('git_rebase', { projectId, target }),
+  /** 把冲突文件标记为已解决；仍有冲突标记时返回 CONFLICT_MARKERS，确认后以 force 重试。 */
+  gitResolve: (projectId: number, paths: string[], force: boolean) =>
+    invoke<void>('git_resolve', { projectId, paths, force }),
+  /** 冲突都已解决后完成合并或继续变基。 */
+  gitContinue: (projectId: number) =>
+    invoke<Integration>('git_continue', { projectId }),
+  /** 变基时跳过当前停下的提交。 */
+  gitSkip: (projectId: number) =>
+    invoke<Integration>('git_skip', { projectId }),
+  /** 中止合并或变基，恢复到开始前的状态。 */
+  gitAbort: (projectId: number) => invoke<void>('git_abort', { projectId }),
   /** 把未跟踪的文件或目录写入项目根目录的 .gitignore。 */
   gitIgnore: (projectId: number, paths: string[]) =>
     invoke<void>('git_ignore', { projectId, paths }),

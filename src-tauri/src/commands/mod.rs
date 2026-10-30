@@ -6,7 +6,10 @@ use tauri::{AppHandle, State, WebviewWindow};
 use crate::{
     error::{AppError, AppResult},
     filesystem::{self, Directory, Document},
-    git::{self, CommitResult, DiffSources, GitLocks, GitStatus, Side},
+    git::{
+        self, Branches, CommitDetail, CommitResult, DiffSources, GitLocks, GitStatus, Integration,
+        LogPage, PullResult, PushResult, Side,
+    },
     session::{ProjectTabs, SessionStore},
     watcher::Watchers,
     window,
@@ -419,4 +422,265 @@ pub async fn save_file(
     let state = workspaces.get(window.label())?;
     blocking(move || filesystem::save(&state, project_id, &path, &content, &expected_revision))
         .await
+}
+
+#[tauri::command]
+/// 当前分支的一页提交记录；skip 为已加载的提交数。
+pub async fn git_log(
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
+    project_id: u64,
+    skip: usize,
+) -> AppResult<LogPage> {
+    let state = workspaces.get(window.label())?;
+    blocking(move || git::log(&state, project_id, skip)).await
+}
+
+#[tauri::command]
+/// 提交的完整信息与变更文件。
+pub async fn git_commit_detail(
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
+    project_id: u64,
+    commit: String,
+) -> AppResult<CommitDetail> {
+    let state = workspaces.get(window.label())?;
+    blocking(move || git::commit_detail(&state, project_id, &commit)).await
+}
+
+#[tauri::command]
+/// 提交中一个文件相对第一个父提交的两侧内容。
+pub async fn git_commit_diff(
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
+    project_id: u64,
+    commit: String,
+    path: String,
+    original: Option<String>,
+) -> AppResult<DiffSources> {
+    let state = workspaces.get(window.label())?;
+    blocking(move || git::commit_diff(&state, project_id, &commit, &path, original.as_deref()))
+        .await
+}
+
+#[tauri::command]
+/// 本地分支与远程仓库。
+pub async fn git_branches(
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
+    project_id: u64,
+) -> AppResult<Branches> {
+    let state = workspaces.get(window.label())?;
+    blocking(move || git::branches(&state, project_id)).await
+}
+
+#[tauri::command]
+/// 新建分支并切换过去；start 为起点分支的完整引用名，为空时从当前 HEAD 新建。返回分支名。
+pub async fn git_create_branch(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    name: String,
+    start: Option<String>,
+) -> AppResult<String> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::create_branch(&state, &locks, project_id, &name, start.as_deref())).await
+}
+
+#[tauri::command]
+/// 检出远程分支为跟踪它的本地分支；返回本地分支名。
+pub async fn git_checkout_remote(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    remote: String,
+    branch: String,
+) -> AppResult<String> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::checkout_remote(&state, &locks, project_id, &remote, &branch)).await
+}
+
+#[tauri::command]
+/// 重命名本地分支；返回新名称。
+pub async fn git_rename_branch(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    name: String,
+    target: String,
+) -> AppResult<String> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::rename_branch(&state, &locks, project_id, &name, &target)).await
+}
+
+#[tauri::command]
+/// 删除本地分支；force 为真时删除未合并的分支。
+pub async fn git_delete_branch(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    name: String,
+    force: bool,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::delete_branch(&state, &locks, project_id, &name, force)).await
+}
+
+#[tauri::command]
+/// 删除远程仓库中的分支。
+pub async fn git_delete_remote_branch(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    remote: String,
+    branch: String,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::delete_remote_branch(&state, &locks, project_id, &remote, &branch)).await
+}
+
+#[tauri::command]
+/// 切换到已有的本地分支。
+pub async fn git_switch_branch(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    name: String,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::switch_branch(&state, &locks, project_id, &name)).await
+}
+
+#[tauri::command]
+/// 从所有远程仓库获取更新。
+pub async fn git_fetch(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::fetch(&state, &locks, project_id)).await
+}
+
+#[tauri::command]
+/// 拉取当前分支的上游，仅快进。
+pub async fn git_pull(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+) -> AppResult<PullResult> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::pull(&state, &locks, project_id)).await
+}
+
+#[tauri::command]
+/// 推送当前分支；没有上游时推送到 remote 并设为上游。
+pub async fn git_push(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    remote: Option<String>,
+) -> AppResult<PushResult> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::push(&state, &locks, project_id, remote.as_deref())).await
+}
+
+#[tauri::command]
+/// 把目标分支（完整引用名）合并到当前分支。
+pub async fn git_merge(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    target: String,
+) -> AppResult<Integration> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::merge(&state, &locks, project_id, &target)).await
+}
+
+#[tauri::command]
+/// 把当前分支变基到目标分支（完整引用名）。
+pub async fn git_rebase(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    target: String,
+) -> AppResult<Integration> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::rebase(&state, &locks, project_id, &target)).await
+}
+
+#[tauri::command]
+/// 把冲突文件标记为已解决。
+pub async fn git_resolve(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    paths: Vec<String>,
+    force: bool,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::resolve(&state, &locks, project_id, &paths, force)).await
+}
+
+#[tauri::command]
+/// 冲突解决后完成合并或继续变基。
+pub async fn git_continue(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+) -> AppResult<Integration> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::proceed(&state, &locks, project_id)).await
+}
+
+#[tauri::command]
+/// 变基时跳过当前停下的提交。
+pub async fn git_skip(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+) -> AppResult<Integration> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::skip(&state, &locks, project_id)).await
+}
+
+#[tauri::command]
+/// 中止进行中的合并或变基。
+pub async fn git_abort(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::abort(&state, &locks, project_id)).await
 }

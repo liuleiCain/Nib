@@ -24,6 +24,8 @@ import {
   GitBranch,
   GitCommitHorizontal,
   GitCompare,
+  GitMerge,
+  History,
   Keyboard,
   LoaderCircle,
   PanelLeft,
@@ -39,9 +41,12 @@ import {
 } from 'lucide-react';
 import type {
   ChangeKind,
+  CommitFile,
+  CommitSummary,
   FileChange,
   FileChanges,
   GitStatus,
+  Integration,
   Project,
   ProjectTabs,
   RecentProject,
@@ -69,7 +74,10 @@ import { ContextMenu } from '../features/explorer/ContextMenu';
 import type { NameRequest } from '../features/explorer/NameDialog';
 import { NameDialog } from '../features/explorer/NameDialog';
 import { ProjectMenu, RecentList } from '../features/projects/ProjectMenu';
+import type { BranchAction } from '../features/git/BranchPopup';
+import { BranchPopup } from '../features/git/BranchPopup';
 import { CommitPanel } from '../features/git/CommitPanel';
+import { LogPanel } from '../features/git/LogPanel';
 import type { DiffTab } from '../features/git/DiffView';
 import { DiffView } from '../features/git/DiffView';
 import { setHeadDoc } from '../features/git/changes';
@@ -80,7 +88,18 @@ type Decision = 'save' | 'discard' | 'cancel';
  * unsaved：未保存内容的保存/放弃确认；其余为单一操作的确认，确认时返回 save：
  * restore 恢复已删除文件、rollback 回滚变更、delete 移到废纸篓。
  */
-type PromptKind = 'unsaved' | 'restore' | 'rollback' | 'delete';
+type PromptKind =
+  | 'unsaved'
+  | 'restore'
+  | 'rollback'
+  | 'delete'
+  | 'deleteBranch'
+  | 'forceDeleteBranch'
+  | 'deleteRemoteBranch'
+  | 'rebase'
+  | 'skipCommit'
+  | 'abortOperation'
+  | 'resolveMarkers';
 interface Prompt {
   kind: PromptKind;
   paths: string[];
@@ -110,7 +129,56 @@ const confirmations: Record<
     description: '以下文件或目录将移到系统废纸篓，可从废纸篓找回。',
     confirm: '移到废纸篓',
   },
+  deleteBranch: {
+    title: '删除本地分支？',
+    description:
+      '将删除以下本地分支（git branch -d），远程分支不受影响。分支有未合并的提交时会再次确认。',
+    confirm: '删除分支',
+  },
+  forceDeleteBranch: {
+    title: '分支尚未合并，仍要删除？',
+    description:
+      '以下分支有尚未合并到当前分支或其上游的提交，强制删除（git branch -D）后这些提交只能通过 reflog 找回。',
+    confirm: '强制删除',
+  },
+  deleteRemoteBranch: {
+    title: '删除远程分支？',
+    description:
+      '将从远程仓库删除以下分支（git push <远程> --delete），其他人也将无法再获取它。此操作无法在 Nib 中撤销。',
+    confirm: '删除远程分支',
+  },
+  rebase: {
+    title: '变基当前分支？',
+    description:
+      '当前分支中目标分支没有的提交将依次重放到目标分支之上，这些提交会被重写为新的提交。已推送过的提交变基后无法普通推送，Nib 不提供强制推送。',
+    confirm: '变基',
+  },
+  skipCommit: {
+    title: '跳过这个提交？',
+    description:
+      '变基将跳过当前停下的提交（git rebase --skip），它的修改和已做的冲突解决都会丢弃，然后继续应用后面的提交。',
+    confirm: '跳过提交',
+  },
+  abortOperation: {
+    title: '中止进行中的操作？',
+    description:
+      '仓库将恢复到开始前的状态（git merge --abort / git rebase --abort），已做的冲突解决都会丢失。',
+    confirm: '中止',
+  },
+  resolveMarkers: {
+    title: '文件中仍有冲突标记，仍要标记为已解决？',
+    description:
+      '以下文件中还有 <<<<<<< … >>>>>>> 冲突标记。标记为已解决后，这些标记会作为文件内容提交。',
+    confirm: '仍然标记',
+  },
 };
+/** 确认框中列出的是分支而不是文件。 */
+const branchPrompts = new Set<PromptKind>([
+  'deleteBranch',
+  'forceDeleteBranch',
+  'deleteRemoteBranch',
+  'rebase',
+]);
 interface PaletteCommand {
   label: string;
   detail: string;
@@ -174,7 +242,7 @@ export function App() {
   const viewRef = useRef<EditorView | null>(null);
   const paletteRef = useRef<HTMLInputElement>(null);
   // Git：侧边栏视图、仓库状态、勾选的文件、提交信息与 Diff 标签。
-  const [panel, setPanel] = useState<'files' | 'commit'>('files');
+  const [panel, setPanel] = useState<'files' | 'commit' | 'log'>('files');
   const [git, setGit] = useState<GitStatus | null>(null);
   const gitRef = useRef<GitStatus | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
@@ -192,6 +260,15 @@ export function App() {
   const [diffs, setDiffs] = useState<DiffTab[]>([]);
   const diffsRef = useRef<DiffTab[]>([]);
   const [unified, setUnified] = useState(false);
+  // 正在进行的 Fetch、Pull 或 Push，同一时间只进行一个；分支弹窗的锚点。
+  const [remoteTask, setRemoteTaskState] = useState<string | null>(null);
+  const remoteTaskRef = useRef<string | null>(null);
+  const [branchPopup, setBranchPopup] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  // 远程操作后递增，让提交记录重新读取远程分支标记。
+  const [refsVersion, setRefsVersion] = useState(0);
   // 文件树右键菜单、名称输入框，以及新建后需要展开的目录。
   const [menu, setMenu] = useState<{
     items: () => MenuItem[];
@@ -208,7 +285,7 @@ export function App() {
   });
   const selected = tabs.find((tab) => tab.path === active);
   const selectedDiff = active?.startsWith(DIFF_PREFIX)
-    ? diffs.find((diff) => DIFF_PREFIX + diff.path === active)
+    ? diffs.find((diff) => DIFF_PREFIX + diff.key === active)
     : undefined;
   const dirtyCount = tabs.filter(isDirty).length;
   const repository = git?.kind === 'repository' ? git : null;
@@ -634,7 +711,7 @@ export function App() {
       const text = JSON.stringify(sources);
       updateDiffs(
         diffsRef.current.map((diff) =>
-          diff.path !== path
+          diff.key !== path
             ? diff
             : !diff.error && JSON.stringify(diff.sources) === text
               ? diff
@@ -645,25 +722,84 @@ export function App() {
       if (projectRef.current?.id !== workspace.id) return;
       updateDiffs(
         diffsRef.current.map((diff) =>
-          diff.path === path ? { ...diff, error: errorMessage(error) } : diff,
+          diff.key === path ? { ...diff, error: errorMessage(error) } : diff,
         ),
       );
     }
   }
 
+  /** 读取提交中一个文件的 Diff；内容不会变化，只读取一次。 */
+  async function loadCommitDiff(diff: DiffTab) {
+    const workspace = projectRef.current;
+    if (!workspace || !diff.commit) return;
+    try {
+      const sources = await backend.gitCommitDiff(
+        workspace.id,
+        diff.commit.hash,
+        diff.path,
+        diff.original,
+      );
+      if (projectRef.current?.id !== workspace.id) return;
+      updateDiffs(
+        diffsRef.current.map((item) =>
+          item.key === diff.key
+            ? { ...item, sources, error: null, version: item.version + 1 }
+            : item,
+        ),
+      );
+    } catch (error) {
+      if (projectRef.current?.id !== workspace.id) return;
+      updateDiffs(
+        diffsRef.current.map((item) =>
+          item.key === diff.key
+            ? { ...item, error: errorMessage(error) }
+            : item,
+        ),
+      );
+    }
+  }
+
+  /** 打开提交中一个文件的 Diff（与第一个父提交比较），只读。 */
+  function openCommitDiff(commit: CommitSummary, file: CommitFile) {
+    if (busyRef.current || promptRef.current) return;
+    // 文件路径不含 NUL，与工作区 Diff 的标识不会冲突。
+    const key = `${commit.hash}\0${file.path}`;
+    if (!diffsRef.current.some((diff) => diff.key === key)) {
+      const diff: DiffTab = {
+        key,
+        path: file.path,
+        original: file.original,
+        sources: null,
+        error: null,
+        version: 0,
+        commit: {
+          hash: commit.hash,
+          parent: commit.parents[0] ?? null,
+          subject: commit.subject,
+        },
+      };
+      updateDiffs([...diffsRef.current, diff]);
+      void loadCommitDiff(diff);
+    }
+    activate(DIFF_PREFIX + key);
+    setOpening(null);
+  }
+
   /** 在主区打开或切换到文件的 Diff 标签。 */
   function openDiff(change: FileChange) {
     if (busyRef.current || promptRef.current) return;
-    const existing = diffsRef.current.find((diff) => diff.path === change.path);
+    const existing = diffsRef.current.find((diff) => diff.key === change.path);
     if (!existing)
       updateDiffs([
         ...diffsRef.current,
         {
+          key: change.path,
           path: change.path,
           original: change.original,
           sources: null,
           error: null,
           version: 0,
+          commit: null,
         },
       ]);
     activate(DIFF_PREFIX + change.path);
@@ -740,7 +876,8 @@ export function App() {
   function refreshDiffs(changed: string[] | null) {
     const status = gitRef.current;
     for (const diff of diffsRef.current) {
-      if (changed && !changed.includes(diff.path)) continue;
+      // 历史提交的内容不会变化，不随工作区刷新。
+      if (diff.commit || (changed && !changed.includes(diff.path))) continue;
       const change =
         status?.kind === 'repository'
           ? status.files.find((file) => file.path === diff.path)
@@ -749,15 +886,15 @@ export function App() {
     }
   }
 
-  function closeDiff(path: string) {
+  function closeDiff(key: string) {
     const old = diffsRef.current;
-    const next = old.filter((diff) => diff.path !== path);
-    if (activeRef.current === DIFF_PREFIX + path) {
-      const index = old.findIndex((diff) => diff.path === path);
+    const next = old.filter((diff) => diff.key !== key);
+    if (activeRef.current === DIFF_PREFIX + key) {
+      const index = old.findIndex((diff) => diff.key === key);
       const neighbour = next[Math.min(index, next.length - 1)];
       activate(
         neighbour
-          ? DIFF_PREFIX + neighbour.path
+          ? DIFF_PREFIX + neighbour.key
           : (tabsRef.current[tabsRef.current.length - 1]?.path ?? null),
       );
     }
@@ -1009,15 +1146,19 @@ export function App() {
       within(path, from) ? to + path.slice(from.length) : path;
     for (const tab of tabsRef.current) tab.path = rename(tab.path);
     updateTabs(tabsRef.current);
+    // 提交 Diff 是历史内容，路径不随改名变化。
     updateDiffs(
       diffsRef.current.map((diff) =>
-        within(diff.path, from) ? { ...diff, path: rename(diff.path) } : diff,
+        !diff.commit && within(diff.path, from)
+          ? { ...diff, key: rename(diff.path), path: rename(diff.path) }
+          : diff,
       ),
     );
     const current = activeRef.current;
-    if (current?.startsWith(DIFF_PREFIX))
-      activate(DIFF_PREFIX + rename(current.slice(DIFF_PREFIX.length)));
-    else if (current) activate(rename(current));
+    if (current?.startsWith(DIFF_PREFIX)) {
+      const key = current.slice(DIFF_PREFIX.length);
+      if (!key.includes('\0')) activate(DIFF_PREFIX + rename(key));
+    } else if (current) activate(rename(current));
   }
 
   /** 移到废纸篓；关闭其中已打开的标签，有未保存编辑时在确认框中提示。 */
@@ -1042,7 +1183,8 @@ export function App() {
         if (projectRef.current?.id !== projectId) return;
         removeTabs(new Set(affected.map((tab) => tab.path)));
         for (const diff of diffsRef.current)
-          if (within(diff.path, target.path)) closeDiff(diff.path);
+          if (!diff.commit && within(diff.path, target.path))
+            closeDiff(diff.key);
         return `已将 ${baseName(target.path)} 移到废纸篓`;
       },
       affected.map((tab) => tab.path),
@@ -1195,6 +1337,11 @@ export function App() {
         },
         { label: '添加到 .gitignore', action: () => ignoreEntry(target) },
       );
+    } else if (file.kind === 'conflicted') {
+      items.push({
+        label: '标记为已解决',
+        action: () => void resolveConflicts([file.path]),
+      });
     } else if (deleted && !file.submodule) {
       items.push({
         label: '从 HEAD 恢复…',
@@ -1246,7 +1393,14 @@ export function App() {
   function changesMenu(files: FileChange[]): MenuItem[] {
     const revertible = revertibleOf(files);
     const untracked = files.filter((file) => file.kind === 'untracked');
+    const conflicted = files.filter((file) => file.kind === 'conflicted');
     const items: MenuItem[] = [];
+    if (conflicted.length)
+      items.push({
+        label: `标记 ${conflicted.length} 个冲突文件为已解决`,
+        action: () =>
+          void resolveConflicts(conflicted.map((file) => file.path)),
+      });
     if (revertible.length)
       items.push({
         label: `回滚 ${revertible.length} 个变更…`,
@@ -1330,6 +1484,16 @@ export function App() {
           label: '查看变更',
           hint: mac ? '⌘D' : 'Ctrl D',
           action: () => diffEntry(target),
+        });
+      if (conflicted)
+        git.push({
+          label: '标记冲突为已解决',
+          action: () =>
+            void resolveConflicts(
+              changed
+                .filter((file) => file.kind === 'conflicted')
+                .map((file) => file.path),
+            ),
         });
       if (revertible)
         git.push({
@@ -1439,6 +1603,389 @@ export function App() {
     }
   }
 
+  function setRemoteTask(task: string | null) {
+    remoteTaskRef.current = task;
+    setRemoteTaskState(task);
+  }
+
+  /** 切换分支、拉取前先保存所有未保存的编辑，避免 Git 改写文件后与编辑器内容冲突。 */
+  async function saveAllForGit(): Promise<boolean> {
+    for (const tab of tabsRef.current)
+      if (isDirty(tab) && !(await saveTab(tab, true))) return false;
+    return true;
+  }
+
+  /**
+   * 输入名称后新建分支并切换过去。start 为起点分支的完整引用名，label 为其显示名；
+   * 从当前 HEAD 新建时不改动工作区文件，从其他分支新建时先保存编辑，未提交的修改冲突时由 Git 拒绝。
+   */
+  function createBranch(
+    start: string | null = null,
+    label: string | null = null,
+  ) {
+    if (!idle() || gitRef.current?.kind !== 'repository') return;
+    setNaming({
+      title: `新建分支（从 ${label ?? '当前 HEAD'}）`,
+      initial: '',
+      confirm: '新建并切换',
+      submit: async (name) => {
+        const workspace = projectRef.current;
+        if (!workspace) return null;
+        if (start && !(await saveAllForGit()))
+          return '有文件未能保存，已取消。请先处理保存失败的文件。';
+        try {
+          const branch = await backend.gitCreateBranch(
+            workspace.id,
+            name,
+            start,
+          );
+          if (projectRef.current?.id !== workspace.id) return null;
+          notify(`已新建并切换到分支 ${branch}`, false);
+          return null;
+        } catch (error) {
+          return errorMessage(error);
+        } finally {
+          if (projectRef.current?.id === workspace.id) gitChanged(true);
+        }
+      },
+    });
+  }
+
+  /** 分支或引用改变后刷新 Git 状态、提交记录；tree 为真时同时刷新文件树（工作区可能被切换）。 */
+  function gitChanged(tree = false) {
+    setRefsVersion((value) => value + 1);
+    if (tree)
+      setTreeChanges((previous) => ({ key: previous.key + 1, paths: null }));
+    void refreshGit(null);
+  }
+
+  /** 检出远程分支为跟踪它的本地分支；同名本地分支已跟踪它时直接切换。 */
+  async function checkoutRemote(remote: string, branch: string) {
+    if (!idle() || !(await saveAllForGit())) return;
+    await runEntryAction('检出分支', async (projectId) => {
+      const local = await backend.gitCheckoutRemote(projectId, remote, branch);
+      return `已切换到 ${local}（跟踪 ${remote}/${branch}）`;
+    });
+    setRefsVersion((value) => value + 1);
+  }
+
+  /** 重命名本地分支，上游配置保留。 */
+  function renameBranch(name: string) {
+    if (!idle()) return;
+    setNaming({
+      title: `重命名分支 ${name}`,
+      initial: name,
+      confirm: '重命名',
+      submit: async (target) => {
+        const workspace = projectRef.current;
+        if (!workspace) return null;
+        try {
+          const next = await backend.gitRenameBranch(
+            workspace.id,
+            name,
+            target,
+          );
+          if (projectRef.current?.id !== workspace.id) return null;
+          if (next !== name) notify(`已将分支 ${name} 重命名为 ${next}`, false);
+          return null;
+        } catch (error) {
+          return errorMessage(error);
+        } finally {
+          if (projectRef.current?.id === workspace.id) gitChanged();
+        }
+      },
+    });
+  }
+
+  /** 确认后删除本地分支；未合并时再次确认才强制删除。 */
+  async function deleteBranch(name: string) {
+    const workspace = projectRef.current;
+    if (!workspace || !idle()) return;
+    if ((await ask([name], 'deleteBranch')) !== 'save') return;
+    let unmerged: string | null = null;
+    const deleted = await runEntryAction('删除分支', async (projectId) => {
+      try {
+        await backend.gitDeleteBranch(projectId, name, false);
+        return `已删除分支 ${name}`;
+      } catch (error) {
+        if (errorCode(error) !== 'NOT_MERGED') throw error;
+        unmerged = errorMessage(error);
+      }
+    });
+    if (projectRef.current?.id !== workspace.id) return;
+    setRefsVersion((value) => value + 1);
+    if (!deleted || !unmerged) return;
+    if ((await ask([name], 'forceDeleteBranch', unmerged)) !== 'save') return;
+    await runEntryAction('删除分支', async (projectId) => {
+      await backend.gitDeleteBranch(projectId, name, true);
+      return `已强制删除分支 ${name}`;
+    });
+    setRefsVersion((value) => value + 1);
+  }
+
+  /** 确认后从远程仓库删除分支；与 Fetch、Push 一样不锁定编辑。 */
+  async function deleteRemoteBranch(remote: string, branch: string) {
+    if (!idle() || remoteTaskRef.current) return;
+    if ((await ask([`${remote}/${branch}`], 'deleteRemoteBranch')) !== 'save')
+      return;
+    void runRemote('删除远程分支', async (projectId) => {
+      await backend.gitDeleteRemoteBranch(projectId, remote, branch);
+      return `已删除远程分支 ${remote}/${branch}`;
+    });
+  }
+
+  /** 执行分支弹窗中选择的操作。 */
+  function branchAction(action: BranchAction, x: number, y: number) {
+    switch (action.kind) {
+      case 'fetch':
+        return fetchRemote();
+      case 'pull':
+        return void pullRemote();
+      case 'push':
+        return void pushRemote(x, y);
+      case 'create':
+        return createBranch(action.start, action.label);
+      case 'switch':
+        return void switchBranch(action.name);
+      case 'checkout':
+        return void checkoutRemote(action.remote, action.branch);
+      case 'rename':
+        return renameBranch(action.name);
+      case 'delete':
+        return void deleteBranch(action.name);
+      case 'deleteRemote':
+        return void deleteRemoteBranch(action.remote, action.branch);
+      case 'merge':
+        return void mergeBranch(action.target, action.label);
+      case 'rebase':
+        return void rebaseBranch(action.target, action.label);
+    }
+  }
+
+  /**
+   * 执行合并、变基、继续或跳过，期间锁定界面。完成时提示结果；因冲突暂停时切到提交面板，
+   * 列出冲突文件。save 为真时先保存所有编辑：开始合并需要干净的工作区，继续需要已保存的冲突解决。
+   */
+  async function integrate(
+    label: string,
+    done: string,
+    action: (projectId: number) => Promise<Integration>,
+    save = true,
+  ) {
+    const workspace = projectRef.current;
+    if (!workspace || !idle() || (save && !(await saveAllForGit()))) return;
+    let stopped: Extract<Integration, { kind: 'stopped' }> | null = null;
+    const finished = await runEntryAction(label, async (projectId) => {
+      const result = await action(projectId);
+      if (result.kind === 'upToDate') return '已是最新，无需操作';
+      if (result.kind === 'done') return `${done} · ${result.hash}`;
+      stopped = result;
+    });
+    if (projectRef.current?.id !== workspace.id) return;
+    setRefsVersion((value) => value + 1);
+    const pause = stopped as Extract<Integration, { kind: 'stopped' }> | null;
+    if (!finished || !pause) return;
+    showCommitPanel();
+    notify(
+      pause.total
+        ? `${label}暂停：${pause.total} 个文件有冲突（${pause.files.join('、')}${pause.total > pause.files.length ? ' 等' : ''}）。在编辑器中解决后标记为已解决，再继续；也可以中止。`
+        : `${label}暂停：${pause.message ?? 'Git 未说明原因。'}`,
+    );
+  }
+
+  /** 把目标分支合并到当前分支；要求没有未提交的修改。 */
+  async function mergeBranch(target: string, label: string) {
+    await integrate('合并', `已将 ${label} 合并到当前分支`, (projectId) =>
+      backend.gitMerge(projectId, target),
+    );
+  }
+
+  /** 确认后把当前分支变基到目标分支。 */
+  async function rebaseBranch(target: string, label: string) {
+    if (!idle() || (await ask([label], 'rebase')) !== 'save') return;
+    await integrate('变基', `已将当前分支变基到 ${label}`, (projectId) =>
+      backend.gitRebase(projectId, target),
+    );
+  }
+
+  /** 冲突都已解决后完成合并或继续变基。 */
+  async function continueOperation() {
+    const operation =
+      gitRef.current?.kind === 'repository' ? gitRef.current.operation : null;
+    if (operation !== '合并' && operation !== '变基') return;
+    await integrate(
+      operation === '合并' ? '完成合并' : '继续变基',
+      operation === '合并' ? '已完成合并' : '已完成变基',
+      (projectId) => backend.gitContinue(projectId),
+    );
+  }
+
+  /** 确认后跳过变基中停下的提交；不保存编辑，被跳过提交的修改本就会丢弃。 */
+  async function skipCommit() {
+    if (!idle() || (await ask([], 'skipCommit')) !== 'save') return;
+    await integrate(
+      '跳过提交',
+      '已完成变基',
+      (projectId) => backend.gitSkip(projectId),
+      false,
+    );
+  }
+
+  /** 确认后中止合并或变基，恢复到开始前的状态。 */
+  async function abortOperation() {
+    const operation =
+      gitRef.current?.kind === 'repository' ? gitRef.current.operation : null;
+    if (!operation || !idle() || (await ask([], 'abortOperation')) !== 'save')
+      return;
+    await runEntryAction(`中止${operation}`, async (projectId) => {
+      await backend.gitAbort(projectId);
+      return `已中止${operation}，仓库恢复到开始前的状态`;
+    });
+    setRefsVersion((value) => value + 1);
+  }
+
+  /** 把冲突文件标记为已解决；文件中仍有冲突标记时再次确认。 */
+  async function resolveConflicts(paths: string[]) {
+    const workspace = projectRef.current;
+    if (!workspace || !paths.length || !idle() || !(await saveAllForGit()))
+      return;
+    let markers: string | null = null;
+    const resolved = await runEntryAction('标记为已解决', async (projectId) => {
+      try {
+        await backend.gitResolve(projectId, paths, false);
+      } catch (error) {
+        if (errorCode(error) !== 'CONFLICT_MARKERS') throw error;
+        markers = errorMessage(error);
+      }
+    });
+    if (projectRef.current?.id !== workspace.id || !resolved || !markers)
+      return;
+    if ((await ask(paths, 'resolveMarkers', markers)) !== 'save') return;
+    await runEntryAction('标记为已解决', (projectId) =>
+      backend.gitResolve(projectId, paths, true),
+    );
+  }
+
+  /** 切换到本地分支；未提交的变更与目标分支冲突时由 Git 拒绝，不会覆盖。 */
+  async function switchBranch(name: string) {
+    if (!idle() || !(await saveAllForGit())) return;
+    await runEntryAction('切换分支', async (projectId) => {
+      await backend.gitSwitchBranch(projectId, name);
+      return `已切换到分支 ${name}`;
+    });
+  }
+
+  /** Fetch、Push：同一时间只进行一个，不锁定编辑；完成后刷新 Git 状态和提交记录。 */
+  async function runRemote(
+    label: string,
+    action: (projectId: number) => Promise<string>,
+  ) {
+    const workspace = projectRef.current;
+    if (!workspace || remoteTaskRef.current) return;
+    setRemoteTask(label);
+    try {
+      const message = await action(workspace.id);
+      if (projectRef.current?.id === workspace.id) notify(message, false);
+    } catch (error) {
+      if (projectRef.current?.id === workspace.id)
+        notify(`${label}失败：${errorMessage(error)}`);
+    } finally {
+      setRemoteTask(null);
+      if (projectRef.current?.id === workspace.id) {
+        setRefsVersion((value) => value + 1);
+        void refreshGit(null);
+      }
+    }
+  }
+
+  function fetchRemote() {
+    void runRemote('获取', async (projectId) => {
+      await backend.gitFetch(projectId);
+      return '已从所有远程仓库获取更新';
+    });
+  }
+
+  /** 仅快进拉取当前分支的上游；会改写工作区文件，先保存编辑并锁定界面。 */
+  async function pullRemote() {
+    if (!idle() || remoteTaskRef.current || !(await saveAllForGit())) return;
+    if (remoteTaskRef.current) return;
+    setRemoteTask('拉取');
+    try {
+      await runEntryAction('拉取', async (projectId) => {
+        const result = await backend.gitPull(projectId);
+        return result.commits
+          ? `已从 ${result.upstream} 快进 ${result.commits} 个提交`
+          : `已是最新，与 ${result.upstream} 一致`;
+      });
+    } finally {
+      setRemoteTask(null);
+      setRefsVersion((value) => value + 1);
+    }
+  }
+
+  /**
+   * 推送当前分支。没有上游时在锚点处列出远程仓库，选择后推送并设为上游；
+   * 被拒绝时说明原因，不提供强制推送。
+   */
+  async function pushRemote(x?: number, y?: number) {
+    const workspace = projectRef.current;
+    const status = gitRef.current;
+    if (!workspace || status?.kind !== 'repository' || remoteTaskRef.current)
+      return;
+    if (!status.branch) {
+      notify('当前处于游离 HEAD，没有可推送的分支。');
+      return;
+    }
+    const push = (remote: string | null) =>
+      void runRemote('推送', async (projectId) => {
+        const result = await backend.gitPush(projectId, remote);
+        return `已推送到 ${result.upstream}`;
+      });
+    if (status.upstream) {
+      push(null);
+      return;
+    }
+    let remotes: string[];
+    try {
+      remotes = (await backend.gitBranches(workspace.id)).remotes.map(
+        (remote) => remote.name,
+      );
+    } catch (error) {
+      notify(`推送失败：${errorMessage(error)}`);
+      return;
+    }
+    if (projectRef.current?.id !== workspace.id) return;
+    if (!remotes.length) {
+      notify('仓库没有配置远程仓库，无法推送。');
+      return;
+    }
+    const branch = status.branch;
+    setMenu({
+      items: () =>
+        remotes.map((remote) => ({
+          label: `推送到 ${remote}/${branch} 并设为上游`,
+          action: () => push(remote),
+        })),
+      marked: null,
+      x: x ?? window.innerWidth / 2 - 120,
+      y: y ?? 120,
+    });
+  }
+
+  /** 在锚点处打开分支弹窗；从状态栏打开时向上展开。 */
+  function openBranches(x?: number, y?: number) {
+    if (gitRef.current?.kind !== 'repository') return;
+    setBranchPopup({
+      x: x ?? window.innerWidth / 2 - 150,
+      y: y ?? 80,
+    });
+  }
+
+  function showLogPanel() {
+    setSidebar(true);
+    setPanel('log');
+  }
+
   function refreshRecent() {
     if (!desktop) return;
     backend
@@ -1519,6 +2066,7 @@ export function App() {
     choices.current.clear();
     setCommitMessage('');
     updateDiffs([]);
+    setBranchPopup(null);
   }
 
   /** 在当前窗口打开项目；调用方负责处理当前项目的未保存内容。 */
@@ -1684,7 +2232,7 @@ export function App() {
       activate(
         next[Math.min(index, next.length - 1)]?.path ??
           (diffsRef.current.length
-            ? DIFF_PREFIX + diffsRef.current[diffsRef.current.length - 1].path
+            ? DIFF_PREFIX + diffsRef.current[diffsRef.current.length - 1].key
             : null),
       );
     }
@@ -1774,6 +2322,56 @@ export function App() {
       detail: 'Git',
       action: () => void refreshGit(null),
       disabled: !project,
+    },
+    {
+      label: '提交记录',
+      detail: 'Git Log',
+      action: showLogPanel,
+      disabled: !repository,
+    },
+    {
+      label: '分支与远程操作',
+      detail: 'Git Branches',
+      action: () => openBranches(),
+      disabled: !repository,
+    },
+    {
+      label: '新建分支',
+      detail: 'Git Branch',
+      action: () => createBranch(),
+      disabled: !repository,
+    },
+    {
+      label: '获取 (Fetch)',
+      detail: 'Git',
+      action: fetchRemote,
+      disabled: !repository || Boolean(remoteTask),
+    },
+    {
+      label: '拉取 (Pull，仅快进)',
+      detail: 'Git',
+      action: () => void pullRemote(),
+      disabled: !repository || Boolean(remoteTask),
+    },
+    {
+      label: '推送 (Push)',
+      detail: 'Git',
+      action: () => void pushRemote(),
+      disabled: !repository || Boolean(remoteTask),
+    },
+    {
+      label: repository?.operation === '变基' ? '继续变基' : '完成合并',
+      detail: 'Git',
+      action: () => void continueOperation(),
+      disabled:
+        repository?.operation !== '合并' && repository?.operation !== '变基',
+    },
+    {
+      label: `中止${repository?.operation === '变基' ? '变基' : '合并'}`,
+      detail: 'Git',
+      action: () => void abortOperation(),
+      disabled:
+        repository?.operation !== '合并' && repository?.operation !== '变基',
     },
     {
       label: '将当前文件加入版本控制',
@@ -2200,6 +2798,16 @@ export function App() {
                       </span>
                     )}
                   </button>
+                  <button
+                    role="tab"
+                    aria-selected={panel === 'log'}
+                    className={panel === 'log' ? 'active' : ''}
+                    onClick={showLogPanel}
+                    disabled={!project}
+                    title="当前分支的提交记录"
+                  >
+                    <History size={14} /> 记录
+                  </button>
                 </div>
                 <button
                   className="icon-button"
@@ -2229,7 +2837,11 @@ export function App() {
                     tabs.filter((tab) => !checked.has(tab.path) && isDirty(tab))
                       .length
                   }
-                  selected={selectedDiff?.path ?? null}
+                  selected={
+                    selectedDiff && !selectedDiff.commit
+                      ? selectedDiff.path
+                      : null
+                  }
                   onOpenDiff={openDiff}
                   onRestore={(path) => void restoreFile(path)}
                   onAdd={(paths) => void addToVcs(paths)}
@@ -2257,7 +2869,37 @@ export function App() {
                   onRefresh={() => void refreshGit(null)}
                   onCommit={() => void commit()}
                   inputRef={commitInput}
+                  remoteTask={remoteTask}
+                  onBranches={openBranches}
+                  onPull={() => void pullRemote()}
+                  onPush={(x, y) => void pushRemote(x, y)}
+                  onResolve={(paths) => void resolveConflicts(paths)}
+                  onContinue={() => void continueOperation()}
+                  onSkip={() => void skipCommit()}
+                  onAbort={() => void abortOperation()}
                 />
+              ) : project && panel === 'log' ? (
+                repository ? (
+                  <LogPanel
+                    key={project.id}
+                    projectId={project.id}
+                    version={`${repository.head}:${repository.branch}:${refsVersion}`}
+                    selected={selectedDiff?.commit ? selectedDiff.key : null}
+                    onOpenFile={openCommitDiff}
+                    onCopy={(text) => void copyText(text, '提交哈希')}
+                  />
+                ) : (
+                  <div className="git-empty">
+                    <History size={22} strokeWidth={1.3} />
+                    <p>
+                      {git?.kind === 'unavailable'
+                        ? 'Git 不可用'
+                        : git?.kind === 'notRepository'
+                          ? '不是 Git 项目'
+                          : (gitError ?? '正在读取 Git 状态…')}
+                    </p>
+                  </div>
+                )
               ) : project ? (
                 <Explorer
                   key={project.id}
@@ -2299,7 +2941,7 @@ export function App() {
               <div className="sidebar-bottom">
                 <span className="version-dot" />
                 <span>Nib 0.1</span>
-                <span className="phase-label">阶段二</span>
+                <span className="phase-label">阶段三</span>
               </div>
             </aside>
             <div
@@ -2392,33 +3034,44 @@ export function App() {
               ))}
               {diffs.map((diff) => (
                 <div
-                  key={DIFF_PREFIX + diff.path}
-                  className={`tab diff-tab ${active === DIFF_PREFIX + diff.path ? 'active' : ''}`}
+                  key={DIFF_PREFIX + diff.key}
+                  className={`tab diff-tab ${active === DIFF_PREFIX + diff.key ? 'active' : ''}`}
                 >
                   <button
                     role="tab"
-                    aria-selected={active === DIFF_PREFIX + diff.path}
-                    title={`${diff.path} 的变更`}
+                    aria-selected={active === DIFF_PREFIX + diff.key}
+                    title={
+                      diff.commit
+                        ? `${diff.path} 在 ${diff.commit.hash.slice(0, 7)} 中的变更 · ${diff.commit.subject}`
+                        : `${diff.path} 的变更`
+                    }
                     onClick={() => {
                       desiredFile.current = null;
-                      activate(DIFF_PREFIX + diff.path);
+                      activate(DIFF_PREFIX + diff.key);
                       setOpening(null);
                     }}
                     onMouseDown={(event) => {
                       if (event.button === 1) {
                         event.preventDefault();
-                        closeDiff(diff.path);
+                        closeDiff(diff.key);
                       }
                     }}
                   >
-                    <GitCompare size={13} />
-                    <span>{baseName(diff.path)}</span>
+                    {diff.commit ? (
+                      <History size={13} />
+                    ) : (
+                      <GitCompare size={13} />
+                    )}
+                    <span>
+                      {baseName(diff.path)}
+                      {diff.commit && ` @ ${diff.commit.hash.slice(0, 7)}`}
+                    </span>
                   </button>
                   <button
                     className="tab-close"
                     aria-label={`关闭 ${baseName(diff.path)} 的变更`}
                     title="关闭变更"
-                    onClick={() => closeDiff(diff.path)}
+                    onClick={() => closeDiff(diff.key)}
                   >
                     <X size={12} />
                   </button>
@@ -2615,8 +3268,11 @@ export function App() {
         <div className="status-git">
           {repository ? (
             <button
-              onClick={showCommitPanel}
-              title={`${repository.root}${repository.upstream ? ` · 上游 ${repository.upstream}` : ''}`}
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                openBranches(rect.left, rect.top);
+              }}
+              title={`分支与远程操作 · ${repository.root}${repository.upstream ? ` · 上游 ${repository.upstream}` : ''}`}
             >
               <GitBranch size={12} />
               {repository.branch ??
@@ -2884,6 +3540,18 @@ export function App() {
           onClose={closeMenu}
         />
       )}
+      {branchPopup && project && (
+        <BranchPopup
+          projectId={project.id}
+          x={branchPopup.x}
+          y={branchPopup.y}
+          remoteTask={remoteTask}
+          onClose={() => setBranchPopup(null)}
+          onAction={(action) =>
+            branchAction(action, branchPopup.x, branchPopup.y)
+          }
+        />
+      )}
       {naming && !prompt && (
         <NameDialog request={naming} onClose={() => setNaming(null)} />
       )}
@@ -2949,7 +3617,9 @@ function UnsavedDialog({
         <div className="dialog-icon">
           {kind === 'unsaved' ? (
             <ArrowDownToLine size={22} />
-          ) : kind === 'delete' ? (
+          ) : kind === 'rebase' ? (
+            <GitMerge size={22} />
+          ) : kind === 'delete' || branchPrompts.has(kind) ? (
             <Trash2 size={22} />
           ) : (
             <Undo2 size={22} />
@@ -2967,7 +3637,11 @@ function UnsavedDialog({
         <ul>
           {paths.map((path) => (
             <li key={path}>
-              <FileCode2 size={14} />
+              {branchPrompts.has(kind) ? (
+                <GitBranch size={14} />
+              ) : (
+                <FileCode2 size={14} />
+              )}
               <span>{path}</span>
             </li>
           ))}

@@ -6,7 +6,7 @@
 
 Nib（笔尖）是一款轻量的**桌面代码编辑器**，核心是基础编辑和 Git 可视化。用户明确要求桌面应用；使用 Tauri 2 原生窗口与系统 WebView 承载界面，Rust 提供本地能力。优先 macOS，保持 Windows/Linux 架构兼容。
 
-当前已完成阶段一编辑器骨架和阶段二 Git 核心闭环（GoLand 默认的勾选提交模式），下一步进入阶段三。请在现有实现上继续，不要重新初始化或替换技术栈。真实中文输入法组合输入、Git 界面的真实窗口交互仍待人工验收。
+当前已完成阶段一编辑器骨架、阶段二 Git 核心闭环（GoLand 默认的勾选提交模式），以及阶段三的 Git 部分（提交记录、分支、Fetch/Push/仅快进 Pull、应用户要求加入的合并与变基）；阶段三剩余快速打开、项目搜索、设置与恢复。请在现有实现上继续，不要重新初始化或替换技术栈。真实中文输入法组合输入、Git 界面的真实窗口交互仍待人工验收。
 
 - 技术栈：Tauri 2、Rust、React、TypeScript、Vite、CodeMirror 6、Lucide、npm。
 - React 管理界面、编辑器和交互状态，Rust 管理本地文件、未来的 Git/搜索/监听/配置。
@@ -95,7 +95,7 @@ npm run desktop:build -- --bundles app
 | `src/features/editor/model.ts`          | 标签状态、语言加载、主题、未保存判定、换行序列化         |
 | `src/features/explorer/`                | 文件树层级加载、展开与刷新，右键菜单与名称输入框         |
 | `src/features/projects/ProjectMenu.tsx` | 最近项目列表与工具栏项目菜单                             |
-| `src/features/git/`                     | 提交面板、Diff 视图、行号旁变更标记                      |
+| `src/features/git/`                     | 提交面板、提交记录、分支弹窗、Diff 视图、行号旁变更标记  |
 | `src/lib/backend.ts`                    | Tauri IPC 类型与命令调用                                 |
 | `src/styles/global.css`                 | 主题变量和界面样式                                       |
 | `src-tauri/src/lib.rs`                  | Tauri 注册、启动恢复窗口、窗口销毁、退出确认事件         |
@@ -103,6 +103,9 @@ npm run desktop:build -- --bundles app
 | `src-tauri/src/session/mod.rs`          | 最近项目、打开的项目、各项目标签的持久化                 |
 | `src-tauri/src/watcher/mod.rs`          | 项目目录监听、事件合并，并推送给对应窗口                 |
 | `src-tauri/src/git/mod.rs`              | Git CLI 调用、状态解析、HEAD 版本读取、勾选提交          |
+| `src-tauri/src/git/history.rs`          | 提交记录分页、提交详情与历史 Diff                        |
+| `src-tauri/src/git/remote.rs`           | 本地/远程分支与分支操作，Fetch、Push、仅快进 Pull        |
+| `src-tauri/src/git/merge.rs`            | 合并、变基，冲突标记已解决、完成/继续、跳过与中止        |
 | `src-tauri/src/commands/mod.rs`         | 命令边界、阻塞任务调度                                   |
 | `src-tauri/src/workspace/mod.rs`        | 按窗口的工作区注册表、项目根目录、工作区 id、路径校验    |
 | `src-tauri/src/filesystem/mod.rs`       | 目录枚举、文本读取、版本检查与安全保存                   |
@@ -110,7 +113,7 @@ npm run desktop:build -- --bundles app
 | `src-tauri/tauri.conf.json`             | 窗口、构建、打包及 CSP                                   |
 | `src-tauri/capabilities/default.json`   | 目录选择与窗口能力权限                                   |
 
-当前自定义命令：`window_startup`、`open_project`、`open_project_window`、`new_window`、`close_project`、`recent_projects`、`forget_project`、`save_tabs`、`cancel_quit`、`list_directory`、`read_file`、`save_file`、`git_status`、`git_diff`、`git_head_file`、`git_commit`、`git_restore`、`git_add`、`git_rollback`、`git_ignore`、`create_entry`、`rename_entry`、`trash_entry`、`reveal_entry`。
+当前自定义命令：`window_startup`、`open_project`、`open_project_window`、`new_window`、`close_project`、`recent_projects`、`forget_project`、`save_tabs`、`cancel_quit`、`list_directory`、`read_file`、`save_file`、`git_status`、`git_diff`、`git_head_file`、`git_commit`、`git_restore`、`git_add`、`git_rollback`、`git_ignore`、`git_log`、`git_commit_detail`、`git_commit_diff`、`git_branches`、`git_create_branch`、`git_switch_branch`、`git_checkout_remote`、`git_rename_branch`、`git_delete_branch`、`git_delete_remote_branch`、`git_fetch`、`git_pull`、`git_push`、`git_merge`、`git_rebase`、`git_resolve`、`git_continue`、`git_skip`、`git_abort`、`create_entry`、`rename_entry`、`trash_entry`、`reveal_entry`。
 
 ## 6. 已执行的验证及边界
 
@@ -150,15 +153,13 @@ Git 实现约束（后续 Git 功能继续遵守）：
 - 限制状态、日志和 Diff 输出；避免旧项目或旧查询的迟到结果覆盖新状态。
 - 仓库读取、搜索等任务不得阻塞界面；避免全项目预扫描和高频轮询。
 - 不向前端开放任意 Shell 能力，优先通过受控 Rust 命令实现。
-- 遇到 Merge/Rebase 等未实现场景，保留状态并明确说明限制。
+- 合并与变基只在已跟踪文件干净时开始，冲突时保留进行中的状态；拣选、还原等未实现的场景保留状态并明确说明限制。
 
 ## 9. 后续待做范围
 
 ### 阶段三：日常使用能力
 
-- 当前分支提交记录分页、作者/时间/短哈希、提交文件与 Diff；先使用线性列表。
-- 本地分支列表、新建/切换，远程地址和上游信息。
-- Fetch、Push、仅快进 Pull；沿用本机 Git 凭据，不存储账号密码，无法交互认证时及时失败并解释原因。
+- 已实现 Git 部分：提交记录分页与只读提交 Diff、本地与远程分支列表及 GoLand 式分支操作菜单（切换、从任意分支新建、检出远程分支、重命名、删除本地/远程分支）、远程地址与上游信息、Fetch / Push / 仅快进 Pull、合并与变基（冲突在编辑器中解决后标记已解决，可完成/继续、跳过、中止）（设计见 `docs/architecture.md` Git 一节，限制见 `docs/roadmap.md`，真实窗口交互待验收）。
 - Cmd/Ctrl+P 文件快速打开；Cmd/Ctrl+Shift+F 项目搜索，按文件分组、可取消、限制结果数、排除 `.git` 且默认尊重 `.gitignore`。
 - 扩展命令面板，提供已实现操作。
 - 字体、字号、缩进、自动换行设置；带版本号的本地配置，经 Rust 统一读写。
@@ -173,7 +174,7 @@ Git 实现约束（后续 Git 功能继续遵守）：
 - 以冷启动可交互 2 秒内、已加载标签切换 100 毫秒内作为初始优化目标，不能当作已达成指标。
 - macOS 打包和实际分发准备，Windows/Linux 对应系统构建验证并如实记录范围。
 
-第一版暂不实现：按行/区块暂存、图形化冲突解决、Merge/Rebase/Cherry-pick、Stash、强推、Reset/Clean（文件树回滚已按用户确认实现）、子模块/多工作区专门管理、内置终端、LSP 和调试器。
+第一版暂不实现：按行/区块暂存、图形化冲突解决（三方合并视图）、交互式变基、Cherry-pick、Stash、强推、Reset/Clean（文件树回滚已按用户确认实现）、子模块/多工作区专门管理、内置终端、LSP 和调试器。
 
 ## 10. 接续开发规范
 

@@ -24,6 +24,8 @@ import { editorHighlight, editorTheme, language } from '../editor/model';
 
 /** 主区打开的一个 Diff 标签。 */
 export interface DiffTab {
+  /** 标签标识：工作区 Diff 为路径，提交 Diff 为 哈希 + NUL + 路径。 */
+  key: string;
   path: string;
   original: string | null;
   /** 数据加载完成前为空。 */
@@ -31,6 +33,8 @@ export interface DiffTab {
   error: string | null;
   /** 每次刷新递增，视图据此重建。 */
   version: number;
+  /** 提交中的历史变更（与第一个父提交比较）；为空时比较 HEAD 与工作区。 */
+  commit: { hash: string; parent: string | null; subject: string } | null;
 }
 
 interface Props {
@@ -115,8 +119,9 @@ export function DiffView({
     ? (sideLabel(sources.current) ?? sideLabel(sources.base))
     : null;
   const comparable = Boolean(sources) && !notice;
-  // 文件已删除时没有可写入的工作区文件，不提供回滚。
-  const revertible = sources?.current.kind === 'text';
+  // 历史提交只读；文件已删除时没有可写入的工作区文件，不提供回滚。
+  const revertible = !diff.commit && sources?.current.kind === 'text';
+  const commit = diff.commit;
 
   useLayoutEffect(() => {
     const parent = host.current;
@@ -249,9 +254,15 @@ export function DiffView({
           <span>
             {added
               ? '（新文件）'
-              : `HEAD${diff.original ? ` · ${diff.original}` : ''}`}
+              : `${commit ? (commit.parent?.slice(0, 7) ?? '') : 'HEAD'}${diff.original ? ` · ${diff.original}` : ''}`}
           </span>
-          <span>{deleted ? '（已删除）' : '工作区'}</span>
+          <span title={commit?.subject}>
+            {deleted
+              ? '（已删除）'
+              : commit
+                ? `${commit.hash.slice(0, 7)} · ${commit.subject}`
+                : '工作区'}
+          </span>
         </span>
         {comparable && <span className="diff-count">{count} 处变更</span>}
         <span className="diff-actions">
@@ -281,7 +292,7 @@ export function DiffView({
           >
             {unified ? <Columns2 size={14} /> : <Rows2 size={14} />}
           </button>
-          {deleted ? (
+          {commit ? null : deleted ? (
             <button
               className="secondary-button"
               onClick={onRestore}

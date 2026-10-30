@@ -1,10 +1,14 @@
 import { useMemo, useState } from 'react';
 import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Check,
   ChevronDown,
   ChevronRight,
   FolderTree,
   GitBranch,
   GitCommitHorizontal,
+  GitMerge,
   List,
   LoaderCircle,
   Plus,
@@ -57,6 +61,21 @@ interface Props {
   onRefresh: () => void;
   onCommit: () => void;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  /** 正在进行的 Fetch、Pull 或 Push。 */
+  remoteTask: string | null;
+  /** 在锚点处打开分支弹窗。 */
+  onBranches: (x: number, y: number) => void;
+  onPull: () => void;
+  /** 推送；未设置上游时在锚点处选择远程仓库。 */
+  onPush: (x: number, y: number) => void;
+  /** 把冲突文件标记为已解决。 */
+  onResolve: (paths: string[]) => void;
+  /** 合并或变基时：完成合并或继续变基。 */
+  onContinue: () => void;
+  /** 变基时跳过当前停下的提交。 */
+  onSkip: () => void;
+  /** 中止合并或变基。 */
+  onAbort: () => void;
 }
 
 interface Group {
@@ -93,6 +112,14 @@ export function CommitPanel({
   onRefresh,
   onCommit,
   inputRef,
+  remoteTask,
+  onBranches,
+  onPull,
+  onPush,
+  onResolve,
+  onContinue,
+  onSkip,
+  onAbort,
 }: Props) {
   const [tree, setTree] = useState(false);
   const [collapsed, setCollapsed] = useState(new Set<string>());
@@ -153,8 +180,16 @@ export function CommitPanel({
   const selectedCount = repository.files.filter((file) =>
     checked.has(file.path),
   ).length;
+  // 合并与变基在面板中继续或中止；拣选、还原等仍需在终端处理。
+  const integrating =
+    repository.operation === '合并' || repository.operation === '变基';
+  const conflicts = repository.files.filter(
+    (file) => file.kind === 'conflicted',
+  );
   const blocked = repository.operation
-    ? `仓库正在进行${repository.operation}，请在终端完成或中止后再提交。`
+    ? integrating
+      ? `正在${repository.operation}，完成或中止后才能普通提交。`
+      : `仓库正在进行${repository.operation}，请在终端完成或中止后再提交。`
     : null;
   const canCommit =
     !committing && !blocked && selectedCount > 0 && message.trim().length > 0;
@@ -206,6 +241,16 @@ export function CommitPanel({
             onClick={() => onAdd([file.path])}
           >
             <Plus size={12} />
+          </button>
+        )}
+        {file.kind === 'conflicted' && integrating && (
+          <button
+            className="change-restore"
+            title="标记为已解决"
+            aria-label={`将 ${file.path} 标记为已解决`}
+            onClick={() => onResolve([file.path])}
+          >
+            <Check size={12} />
           </button>
         )}
         {file.kind === 'deleted' && (
@@ -298,12 +343,49 @@ export function CommitPanel({
   return (
     <div className="commit-panel">
       <div className="commit-toolbar">
-        <span className="commit-branch" title={repository.root}>
+        <button
+          className="commit-branch"
+          title={`分支与远程操作 · ${repository.root}`}
+          onClick={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            onBranches(rect.left, rect.bottom);
+          }}
+        >
           <GitBranch size={13} />
           {repository.branch ?? `游离 ${repository.head?.slice(0, 7) ?? ''}`}
           {Boolean(repository.ahead) && <span>↑{repository.ahead}</span>}
           {Boolean(repository.behind) && <span>↓{repository.behind}</span>}
-        </span>
+          <ChevronDown size={11} />
+        </button>
+        <button
+          className="icon-button"
+          title={`拉取（仅快进）${repository.upstream ? ` · ${repository.upstream}` : ''}`}
+          aria-label="拉取"
+          disabled={Boolean(remoteTask)}
+          onClick={onPull}
+        >
+          {remoteTask === '拉取' ? (
+            <LoaderCircle size={13} className="spin" />
+          ) : (
+            <ArrowDownToLine size={13} />
+          )}
+        </button>
+        <button
+          className="icon-button"
+          title={`推送${repository.upstream ? ` · ${repository.upstream}` : '（未设置上游）'}`}
+          aria-label="推送"
+          disabled={Boolean(remoteTask)}
+          onClick={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            onPush(rect.left, rect.bottom);
+          }}
+        >
+          {remoteTask === '推送' ? (
+            <LoaderCircle size={13} className="spin" />
+          ) : (
+            <ArrowUpFromLine size={13} />
+          )}
+        </button>
         <button
           className="icon-button"
           title={tree ? '平铺显示' : '按目录分组'}
@@ -325,6 +407,41 @@ export function CommitPanel({
           )}
         </button>
       </div>
+
+      {integrating && (
+        <div className="operation-banner">
+          <p>
+            <GitMerge size={13} />
+            {conflicts.length
+              ? `正在${repository.operation}：${conflicts.length} 个文件有冲突。在编辑器中解决冲突标记后标记为已解决。`
+              : `正在${repository.operation}：没有未解决的冲突，可以${repository.operation === '合并' ? '完成合并' : '继续变基'}。`}
+          </p>
+          <div>
+            <button
+              className="primary-button"
+              disabled={conflicts.length > 0}
+              title={
+                conflicts.length
+                  ? '请先解决并标记所有冲突文件'
+                  : repository.operation === '合并'
+                    ? '生成合并提交'
+                    : '应用下一个提交'
+              }
+              onClick={onContinue}
+            >
+              {repository.operation === '合并' ? '完成合并' : '继续变基'}
+            </button>
+            {repository.operation === '变基' && (
+              <button className="secondary-button" onClick={onSkip}>
+                跳过此提交
+              </button>
+            )}
+            <button className="text-button danger" onClick={onAbort}>
+              中止{repository.operation}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="change-list" role="tree" aria-label="变更文件">
         {!total && <p className="change-empty">没有变更</p>}
