@@ -1,11 +1,11 @@
-import { EditorState, Compartment } from '@codemirror/state';
-import type { ChangeSpec, Extension, Text } from '@codemirror/state';
-import { EditorView, keymap } from '@codemirror/view';
-import { basicSetup } from 'codemirror';
-import { indentWithTab } from '@codemirror/commands';
-import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
-import { tags } from '@lezer/highlight';
-import type { Document } from '../../lib/backend';
+import type {ChangeSpec, Extension, Text} from '@codemirror/state';
+import {Compartment, EditorState} from '@codemirror/state';
+import {EditorView, keymap} from '@codemirror/view';
+import {basicSetup} from 'codemirror';
+import {indentWithTab} from '@codemirror/commands';
+import {HighlightStyle, syntaxHighlighting} from '@codemirror/language';
+import {tags} from '@lezer/highlight';
+import type {Document} from '../../lib/backend';
 
 /** 标签保存独立的编辑器状态，切换时保留撤销历史、选区和滚动位置。 */
 export interface Tab {
@@ -18,6 +18,10 @@ export interface Tab {
   scroll: { top: number; left: number };
   /** 外部修改与未保存编辑冲突、文件无法读取或自动保存失败时暂停自动保存，避免覆盖外部修改。 */
   paused: boolean;
+  /** 超大文件只读预览：只含开头部分，禁止编辑和保存。 */
+  truncated: boolean;
+  /** 磁盘文件总字节数。 */
+  size: number;
 }
 
 export const wrapCompartment = new Compartment();
@@ -159,6 +163,7 @@ export async function createTab(
       wrapCompartment.of([]),
       editableCompartment.of(EditorView.editable.of(true)),
       EditorState.tabSize.of(4),
+      EditorState.readOnly.of(document.truncated),
     ],
   });
   return {
@@ -170,7 +175,16 @@ export async function createTab(
     hasBom: document.hasBom,
     scroll: { top: 0, left: 0 },
     paused: false,
+    truncated: document.truncated,
+    size: document.size,
   };
+}
+
+/** 文件大小的可读表示。 */
+export function formatSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${bytes} B`;
 }
 
 /** 磁盘新内容与当前文档的最小替换区间；未变化部分的光标、选区和滚动位置得以保留。 */

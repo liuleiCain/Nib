@@ -1,56 +1,45 @@
-import { useEffect, useRef, useState } from 'react';
-import type { CSSProperties } from 'react';
-import { Transaction } from '@codemirror/state';
-import type { EditorState } from '@codemirror/state';
-import { EditorView } from '@codemirror/view';
-import { redo, undo } from '@codemirror/commands';
-import { openSearchPanel } from '@codemirror/search';
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { listen } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-dialog';
+import type {CSSProperties} from 'react';
+import {useEffect, useRef, useState} from 'react';
+import type {EditorState} from '@codemirror/state';
+import {Transaction} from '@codemirror/state';
+import {EditorView} from '@codemirror/view';
+import {redo, undo} from '@codemirror/commands';
+import {openSearchPanel} from '@codemirror/search';
+import {getCurrentWindow} from '@tauri-apps/api/window';
+import {getCurrentWebviewWindow} from '@tauri-apps/api/webviewWindow';
+import {listen} from '@tauri-apps/api/event';
+import {open} from '@tauri-apps/plugin-dialog';
 import {
-  ArrowDownToLine,
-  ArrowRight,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  ChevronsLeftRight,
-  Command,
-  Ellipsis,
-  FileCode2,
-  Files,
-  FolderOpen,
-  Keyboard,
-  LoaderCircle,
-  PanelLeft,
-  PenLine,
-  RotateCw,
-  Save,
-  Search,
-  Settings2,
-  WrapText,
-  X,
+    ArrowDownToLine,
+    ArrowRight,
+    Check,
+    ChevronDown,
+    ChevronRight,
+    ChevronsLeftRight,
+    Command,
+    Ellipsis,
+    FileCode2,
+    Files,
+    FolderOpen,
+    Keyboard,
+    LoaderCircle,
+    PanelLeft,
+    PenLine,
+    RotateCw,
+    Save,
+    Search,
+    Settings2,
+    WrapText,
+    X,
 } from 'lucide-react';
-import { backend, desktop, errorMessage } from '../lib/backend';
-import type {
-  FileChanges,
-  Project,
-  ProjectTabs,
-  RecentProject,
-} from '../lib/backend';
-import { Editor } from '../features/editor/Editor';
-import {
-  createTab,
-  diffChange,
-  isDirty,
-  languageName,
-  serialize,
-} from '../features/editor/model';
-import type { Tab } from '../features/editor/model';
-import { Explorer } from '../features/explorer/Explorer';
-import type { TreeChanges } from '../features/explorer/Explorer';
-import { ProjectMenu, RecentList } from '../features/projects/ProjectMenu';
+import type {FileChanges, Project, ProjectTabs, RecentProject,} from '../lib/backend';
+import {backend, desktop, errorMessage} from '../lib/backend';
+import {Editor} from '../features/editor/Editor';
+import type {Tab} from '../features/editor/model';
+import {createTab, diffChange, formatSize, isDirty, languageName, serialize,} from '../features/editor/model';
+import type {TreeChanges} from '../features/explorer/Explorer';
+import {Explorer} from '../features/explorer/Explorer';
+import {ProjectMenu, RecentList} from '../features/projects/ProjectMenu';
 
 type Decision = 'save' | 'discard' | 'cancel';
 interface Prompt {
@@ -285,6 +274,16 @@ export function App() {
             `${baseName(path)} 已被外部修改，与未保存的编辑冲突。已暂停自动保存，可重新加载磁盘版本。`,
           );
         }
+        return;
+      }
+      // 文件跨过可编辑上限时只读状态改变，重新建立标签状态。
+      if (document.truncated !== tab.truncated) {
+        const replacement = await createTab(path, document);
+        replacement.scroll = tab.scroll;
+        if (projectRef.current?.id !== workspace.id) return;
+        updateTabs(
+          tabsRef.current.map((item) => (item === tab ? replacement : item)),
+        );
         return;
       }
       applyDisk(tab, document);
@@ -1156,6 +1155,11 @@ export function App() {
                   {part}
                 </span>
               ))}
+              {selected.truncated && (
+                <span className="unsaved-label">
+                  {`只读预览 · 文件 ${formatSize(selected.size)}，超过 20 MiB，仅显示开头 5 MiB`}
+                </span>
+              )}
               {isDirty(selected) && (
                 <span className="unsaved-label">
                   {selected.paused

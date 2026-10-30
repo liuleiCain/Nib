@@ -1,4 +1,4 @@
-import { invoke, isTauri } from '@tauri-apps/api/core';
+import {invoke, isTauri} from '@tauri-apps/api/core';
 
 export const desktop = isTauri();
 
@@ -26,6 +26,10 @@ export interface Document {
   newline: 'LF' | 'CRLF' | 'CR';
   hasBom: boolean;
   mixedNewlines: boolean;
+  /** 超过可编辑上限，content 只是开头部分，只读展示且不保存。 */
+  truncated: boolean;
+  /** 磁盘文件总字节数。 */
+  size: number;
 }
 
 /** 项目上次打开的标签，路径相对项目根目录。 */

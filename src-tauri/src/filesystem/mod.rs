@@ -11,7 +11,12 @@ use crate::{
     workspace::WorkspaceState,
 };
 
-const MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
+/// 可编辑文件上限，与 GoLand 默认的 20 MB 加载上限一致；超过时只读预览开头部分。
+const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
+/// 超大文本只读预览读取的字节数。
+const PREVIEW_BYTES: u64 = 5 * 1024 * 1024;
+/// 判断二进制时检查的开头字节数。
+const SNIFF_BYTES: u64 = 8 * 1024;
 const MAX_DIRECTORY_ENTRIES: usize = 10_000;
 
 /// 文件树的一层条目，路径始终相对工作区。
@@ -41,6 +46,10 @@ pub struct Document {
     pub newline: &'static str,
     pub has_bom: bool,
     pub mixed_newlines: bool,
+    /// 文件超过可编辑上限，content 只是开头部分，前端须只读展示且不保存。
+    pub truncated: bool,
+    /// 磁盘文件的总字节数。
+    pub size: u64,
 }
 
 fn revision(bytes: &[u8]) -> String {
@@ -97,7 +106,8 @@ pub fn list(state: &WorkspaceState, id: u64, path: &str) -> AppResult<Directory>
     })
 }
 
-fn read_limited(path: &std::path::Path) -> AppResult<Vec<u8>> {
+/// 打开普通文件并返回其字节数，拒绝目录和特殊设备。
+fn open_regular(path: &std::path::Path) -> AppResult<(fs::File, u64)> {
     // 打开 FIFO 可能阻塞，必须在打开前拒绝已知特殊文件。
     if !fs::metadata(path)?.is_file() {
         return Err(AppError::new(
@@ -113,36 +123,73 @@ fn read_limited(path: &std::path::Path) -> AppResult<Vec<u8>> {
             "此路径不是普通文件；暂不支持符号链接目录和特殊设备。",
         ));
     }
-    if metadata.len() > MAX_FILE_BYTES {
-        return Err(AppError::new(
-            "FILE_TOO_LARGE",
-            "文件超过 5 MiB，阶段一暂不加载，请使用其他编辑器打开。",
-        ));
+    Ok((file, metadata.len()))
+}
+
+fn too_large() -> AppError {
+    AppError::new(
+        "FILE_TOO_LARGE",
+        "文件超过 20 MiB，无法编辑或保存，只能只读预览开头部分。",
+    )
+}
+
+/// 读取完整文件，用于保存前的版本检查；超过可编辑上限时报错。
+fn read_limited(path: &std::path::Path) -> AppResult<Vec<u8>> {
+    let (file, size) = open_regular(path)?;
+    if size > MAX_FILE_BYTES {
+        return Err(too_large());
     }
     let mut bytes = Vec::new();
     file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err(AppError::new(
-            "FILE_TOO_LARGE",
-            "读取时文件超过 5 MiB，已停止加载。",
-        ));
+        return Err(too_large());
     }
     Ok(bytes)
 }
 
+fn binary() -> AppError {
+    AppError::new("BINARY", "这是二进制文件，Nib 暂不提供二进制预览。")
+}
+
+fn encoding() -> AppError {
+    AppError::new("ENCODING", "此文件不是 UTF-8 编码，请先使用其他工具转换。")
+}
+
 /// 拒绝不支持的内容，并统一编辑器使用的换行表示。
+///
+/// 先检查开头是否为二进制，再看大小：不超过可编辑上限时完整读取；超过时只读取开头
+/// 一段作为只读预览，避免把超大文件整体读入内存和 WebView。
 pub fn read(state: &WorkspaceState, id: u64, path: &str) -> AppResult<Document> {
     let workspace = state.lock()?;
     let resolved = workspace.resolve(id, path)?;
-    let bytes = read_limited(&resolved)?;
+    let (file, size) = open_regular(&resolved)?;
+    let truncated = size > MAX_FILE_BYTES;
+    let limit = if truncated {
+        PREVIEW_BYTES
+    } else {
+        MAX_FILE_BYTES + 1
+    };
+    let mut bytes = Vec::new();
+    let mut reader = file.take(limit);
+    (&mut reader).take(SNIFF_BYTES).read_to_end(&mut bytes)?;
     if bytes.contains(&0) {
-        return Err(AppError::new(
-            "BINARY",
-            "这是二进制文件，Nib 暂不提供二进制预览。",
-        ));
+        return Err(binary());
     }
-    let text = std::str::from_utf8(&bytes)
-        .map_err(|_| AppError::new("ENCODING", "此文件不是 UTF-8 编码，请先使用其他工具转换。"))?;
+    reader.read_to_end(&mut bytes)?;
+    if !truncated && bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(too_large());
+    }
+    if bytes.contains(&0) {
+        return Err(binary());
+    }
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(text) => text,
+        // 预览在多字节字符中间截断时，丢弃末尾不完整的字符。
+        Err(error) if truncated && error.error_len().is_none() => {
+            std::str::from_utf8(&bytes[..error.valid_up_to()]).map_err(|_| encoding())?
+        }
+        Err(_) => return Err(encoding()),
+    };
     let has_bom = text.starts_with('\u{feff}');
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let crlf = text.matches("\r\n").count();
@@ -153,7 +200,8 @@ pub fn read(state: &WorkspaceState, id: u64, path: &str) -> AppResult<Document> 
         .filter(|count| *count > 0)
         .count()
         > 1;
-    if mixed_newlines {
+    // 只读预览不会写回，混合换行不影响展示。
+    if mixed_newlines && !truncated {
         return Err(AppError::new(
             "MIXED_NEWLINES",
             "文件含有混合换行符。为避免整文件变化，阶段一暂不编辑此文件。",
@@ -171,6 +219,8 @@ pub fn read(state: &WorkspaceState, id: u64, path: &str) -> AppResult<Document> 
         },
         has_bom,
         mixed_newlines,
+        truncated,
+        size,
     })
 }
 
@@ -185,7 +235,7 @@ pub fn save(
     if content.len() as u64 > MAX_FILE_BYTES {
         return Err(AppError::new(
             "FILE_TOO_LARGE",
-            "编辑内容超过 5 MiB，无法保存。请缩小内容后重试。",
+            "编辑内容超过 20 MiB，无法保存。请缩小内容后重试。",
         ));
     }
     let workspace = state.lock()?;
