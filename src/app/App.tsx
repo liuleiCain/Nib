@@ -3302,8 +3302,10 @@ export function App() {
                     aria-selected={panel === 'files'}
                     className={panel === 'files' ? 'active' : ''}
                     onClick={() => setPanel('files')}
+                    aria-label="文件"
+                    title="文件"
                   >
-                    <Files size={14} /> 文件
+                    <Files size={14} />
                   </button>
                   <button
                     role="tab"
@@ -3311,9 +3313,10 @@ export function App() {
                     className={panel === 'commit' ? 'active' : ''}
                     onClick={showCommitPanel}
                     disabled={!project}
+                    aria-label="提交"
                     title={`提交 (${mod}+K)`}
                   >
-                    <GitCommitHorizontal size={14} /> 提交
+                    <GitCommitHorizontal size={14} />
                     {Boolean(repository?.files.length) && (
                       <span className="sidebar-badge">
                         {repository!.files.length}
@@ -3326,9 +3329,10 @@ export function App() {
                     className={panel === 'log' ? 'active' : ''}
                     onClick={showLogPanel}
                     disabled={!project}
+                    aria-label="提交记录"
                     title="当前分支的提交记录"
                   >
-                    <History size={14} /> 记录
+                    <History size={14} />
                   </button>
                   <button
                     role="tab"
