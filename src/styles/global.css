@@ -244,7 +244,7 @@ kbd {
   justify-content: space-between;
   padding: 0 10px 0 13px;
   gap: 8px;
-  color: #abb6bd;
+  color: #e3e7ea;
   font-size: 11px;
   font-weight: 600;
 }
@@ -268,7 +268,7 @@ kbd {
   align-items: center;
   gap: 6px;
   height: 28px;
-  color: #9aa6af;
+  color: #e3e7ea;
   font-size: 12px;
   white-space: nowrap;
   text-align: left;
@@ -279,7 +279,7 @@ kbd {
 }
 .tree-row.selected {
   background: #8fb6a914;
-  color: #d2ded9;
+  color: #ffffff;
   box-shadow: inset 2px 0 #8fb6a9;
 }
 .tree-row > span:not(.tree-indent, .tree-git) {
@@ -300,10 +300,10 @@ kbd {
   flex-shrink: 0;
 }
 .folder-icon {
-  color: #899ba5;
+  color: #a9bac3;
 }
 .code-icon {
-  color: #85a69e;
+  color: #9cc0b6;
 }
 .tree-message {
   display: flex;
