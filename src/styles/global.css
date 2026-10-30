@@ -1696,6 +1696,19 @@ button.commit-branch svg:last-child {
   font-size: 12px;
   outline: none;
 }
+/* 多个输入框时，每个输入框上方显示说明 */
+.name-label {
+  display: block;
+}
+.name-label + .name-label {
+  margin-top: 10px;
+}
+.name-label > span {
+  display: block;
+  margin-bottom: 5px;
+  color: #8d999f;
+  font-size: 11px;
+}
 .name-input:focus {
   border-color: #8fb6a9;
 }
@@ -1964,24 +1977,6 @@ button.commit-branch svg:last-child {
 }
 .branch-note.error {
   color: #d9a98f;
-}
-.branch-remote {
-  display: flex;
-  gap: 8px;
-  margin: 0;
-  padding: 3px 10px 5px;
-  font-size: 11px;
-}
-.branch-remote span:first-child {
-  color: #a9b5bb;
-  flex-shrink: 0;
-}
-.branch-remote span:last-child {
-  min-width: 0;
-  color: #66737b;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* 快速打开 */

@@ -23,6 +23,7 @@ import {
   Files,
   FolderOpen,
   GitBranch,
+  Server,
   GitCommitHorizontal,
   GitCompare,
   GitMerge,
@@ -103,6 +104,7 @@ type PromptKind =
   | 'deleteBranch'
   | 'forceDeleteBranch'
   | 'deleteRemoteBranch'
+  | 'removeRemote'
   | 'rebase'
   | 'skipCommit'
   | 'abortOperation'
@@ -181,6 +183,12 @@ const confirmations: Record<
     description:
       '将从远程仓库删除以下分支（git push <远程> --delete），其他人也将无法再获取它。此操作无法在 Nib 中撤销。',
     confirm: '删除远程分支',
+  },
+  removeRemote: {
+    title: '删除远程仓库？',
+    description:
+      '将删除以下远程仓库的配置（git remote remove）及本地记录的远程分支，跟踪它的本地分支会失去上游。远程服务器上的仓库不受影响，可重新添加。',
+    confirm: '删除远程仓库',
   },
   rebase: {
     title: '变基当前分支？',
@@ -1805,6 +1813,108 @@ export function App() {
     });
   }
 
+  /** 添加远程仓库；只写配置，添加后可获取（Fetch）或推送并设置上游。initial 为建议的名称。 */
+  function addRemote(initial = '') {
+    if (
+      !idle() ||
+      remoteTaskRef.current ||
+      gitRef.current?.kind !== 'repository'
+    )
+      return;
+    setNaming({
+      title: '添加远程仓库',
+      label: '名称',
+      initial,
+      placeholder: 'origin',
+      extra: {
+        label: '地址',
+        initial: '',
+        placeholder: 'git@github.com:用户/仓库.git 或 https://…',
+      },
+      confirm: '添加',
+      submit: async (name, url) => {
+        const workspace = projectRef.current;
+        if (!workspace) return null;
+        try {
+          const remote = await backend.gitAddRemote(workspace.id, name, url);
+          if (projectRef.current?.id !== workspace.id) return null;
+          notify(`已添加远程仓库 ${remote}，可获取（Fetch）或推送`, false);
+          return null;
+        } catch (error) {
+          return errorMessage(error);
+        } finally {
+          if (projectRef.current?.id === workspace.id) gitChanged();
+        }
+      },
+    });
+  }
+
+  /** 修改远程仓库地址；列表中的地址隐藏了密码，含密码时需重新输入。 */
+  function editRemote(name: string, url: string) {
+    if (!idle() || remoteTaskRef.current) return;
+    setNaming({
+      title: `修改远程仓库 ${name} 的地址`,
+      label: '地址',
+      initial: url,
+      confirm: '保存',
+      submit: async (next) => {
+        const workspace = projectRef.current;
+        if (!workspace) return null;
+        if (next.trim() === url) return null;
+        try {
+          await backend.gitSetRemoteUrl(workspace.id, name, next);
+          if (projectRef.current?.id !== workspace.id) return null;
+          notify(`已修改远程仓库 ${name} 的地址`, false);
+          return null;
+        } catch (error) {
+          return errorMessage(error);
+        } finally {
+          if (projectRef.current?.id === workspace.id) gitChanged();
+        }
+      },
+    });
+  }
+
+  /** 重命名远程仓库，远程分支和本地分支的上游配置随之改名。 */
+  function renameRemote(name: string) {
+    if (!idle() || remoteTaskRef.current) return;
+    setNaming({
+      title: `重命名远程仓库 ${name}`,
+      initial: name,
+      confirm: '重命名',
+      submit: async (target) => {
+        const workspace = projectRef.current;
+        if (!workspace) return null;
+        try {
+          const next = await backend.gitRenameRemote(
+            workspace.id,
+            name,
+            target,
+          );
+          if (projectRef.current?.id !== workspace.id) return null;
+          if (next !== name)
+            notify(`已将远程仓库 ${name} 重命名为 ${next}`, false);
+          return null;
+        } catch (error) {
+          return errorMessage(error);
+        } finally {
+          if (projectRef.current?.id === workspace.id) gitChanged();
+        }
+      },
+    });
+  }
+
+  /** 确认后删除远程仓库配置；远程服务器不受影响。 */
+  async function removeRemote(name: string) {
+    if (!idle() || remoteTaskRef.current) return;
+    if ((await ask([name], 'removeRemote')) !== 'save') return;
+    await runEntryAction('删除远程仓库', async (projectId) => {
+      await backend.gitRemoveRemote(projectId, name);
+      return `已删除远程仓库 ${name}`;
+    });
+    setRefsVersion((value) => value + 1);
+  }
+
   /** 执行分支弹窗中选择的操作。 */
   function branchAction(action: BranchAction, x: number, y: number) {
     switch (action.kind) {
@@ -1830,6 +1940,14 @@ export function App() {
         return void mergeBranch(action.target, action.label);
       case 'rebase':
         return void rebaseBranch(action.target, action.label);
+      case 'addRemote':
+        return addRemote(action.initial);
+      case 'editRemote':
+        return editRemote(action.name, action.url);
+      case 'renameRemote':
+        return renameRemote(action.name);
+      case 'removeRemote':
+        return void removeRemote(action.name);
     }
   }
 
@@ -2027,7 +2145,7 @@ export function App() {
     }
     if (projectRef.current?.id !== workspace.id) return;
     if (!remotes.length) {
-      notify('仓库没有配置远程仓库，无法推送。');
+      notify('仓库没有配置远程仓库，可在分支弹窗的“远程仓库”中添加后再推送。');
       return;
     }
     const branch = status.branch;
@@ -2700,6 +2818,12 @@ export function App() {
       detail: 'Git Branch',
       action: () => createBranch(),
       disabled: !repository,
+    },
+    {
+      label: '添加远程仓库',
+      detail: 'Git Remote',
+      action: () => addRemote(),
+      disabled: !repository || Boolean(remoteTask),
     },
     {
       label: '获取 (Fetch)',
@@ -4223,7 +4347,9 @@ function UnsavedDialog({
             <ArchiveRestore size={22} />
           ) : kind === 'rebase' ? (
             <GitMerge size={22} />
-          ) : kind === 'delete' || branchPrompts.has(kind) ? (
+          ) : kind === 'delete' ||
+            kind === 'removeRemote' ||
+            branchPrompts.has(kind) ? (
             <Trash2 size={22} />
           ) : (
             <Undo2 size={22} />
@@ -4243,7 +4369,9 @@ function UnsavedDialog({
         <ul>
           {paths.map((path) => (
             <li key={path}>
-              {branchPrompts.has(kind) ? (
+              {kind === 'removeRemote' ? (
+                <Server size={14} />
+              ) : branchPrompts.has(kind) ? (
                 <GitBranch size={14} />
               ) : (
                 <FileCode2 size={14} />

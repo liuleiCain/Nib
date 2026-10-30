@@ -1,4 +1,5 @@
-//! 分支与远程：本地与远程分支列表，新建、切换、检出、重命名、删除分支，Fetch、Push 和仅快进的 Pull。
+//! 分支与远程：本地与远程分支列表，新建、切换、检出、重命名、删除分支，远程仓库的添加、改地址、重命名、删除，
+//! Fetch、Push 和仅快进的 Pull。
 
 use std::{path::Path, time::Duration};
 
@@ -601,6 +602,153 @@ pub fn delete_remote_branch(
     Ok(())
 }
 
+/// 校验远程仓库名：规则与 Git 一致（refs/remotes/<名称>/x 须是合法引用），不能以 - 开头。
+fn remote_name<'a>(root: &Path, name: &'a str) -> AppResult<&'a str> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::new("REMOTE", "请输入远程仓库名。"));
+    }
+    let invalid = name.starts_with('-')
+        || name.chars().any(char::is_control)
+        || !run(
+            root,
+            &["check-ref-format", &format!("refs/remotes/{name}/x")],
+            None,
+            ERROR_LIMIT,
+            READ_TIMEOUT,
+        )?
+        .success;
+    if invalid {
+        return Err(AppError::new(
+            "REMOTE",
+            "远程仓库名不符合 Git 的命名规则（不能含空格、~ ^ : ? * [ \\、连续的点，不能以 - 开头）。",
+        ));
+    }
+    Ok(name)
+}
+
+/// 校验远程仓库地址；列表中显示的地址隐藏了密码，不能原样写回。
+fn remote_url(url: &str) -> AppResult<&str> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err(AppError::new("REMOTE", "请输入远程仓库地址。"));
+    }
+    if url.starts_with('-') || url.chars().any(char::is_control) {
+        return Err(AppError::new(
+            "REMOTE",
+            "远程仓库地址不能以 - 开头，也不能包含换行等控制字符。",
+        ));
+    }
+    if url.contains("://") && url.contains(":***@") {
+        return Err(AppError::new(
+            "REMOTE",
+            "地址中的密码已隐藏为 ***，请输入完整的密码或令牌，或改用不含密码的地址（配合凭据助手）。",
+        ));
+    }
+    Ok(url)
+}
+
+/// 已配置的远程仓库中是否有该名称，没有时返回错误。
+fn existing_remote(root: &Path, name: &str) -> AppResult<()> {
+    if remote_names(root)?.iter().any(|item| item == name) {
+        return Ok(());
+    }
+    Err(AppError::new(
+        "REMOTE",
+        format!("远程仓库 {name} 不存在，请刷新后重试。"),
+    ))
+}
+
+/// 获取远程仓库锁；配置远程不受进行中的合并或变基影响，只与同仓库的其他操作串行。
+fn remote_guard(root: &Path, locks: &GitLocks) -> AppResult<std::sync::Arc<std::sync::Mutex<()>>> {
+    let info = repo_info(root)?.ok_or_else(|| AppError::new("GIT", "项目不在 Git 仓库内。"))?;
+    locks.get(&info.top)
+}
+
+/// 添加远程仓库（git remote add），只写配置，不连接远程；返回远程仓库名。
+pub fn add_remote(
+    state: &WorkspaceState,
+    locks: &GitLocks,
+    id: u64,
+    name: &str,
+    url: &str,
+) -> AppResult<String> {
+    let root = project_root(state, id)?;
+    let lock = remote_guard(&root, locks)?;
+    let _guard = guard(&lock)?;
+    let name = remote_name(&root, name)?;
+    let url = remote_url(url)?;
+    if remote_names(&root)?.iter().any(|item| item == name) {
+        return Err(AppError::new("REMOTE", format!("远程仓库 {name} 已存在。")));
+    }
+    local_write(&root, &["remote", "add", "--", name, url], "添加远程仓库")?;
+    Ok(name.to_owned())
+}
+
+/// 修改远程仓库的地址（git remote set-url）；单独配置的推送地址（pushurl）保持不变。
+pub fn set_remote_url(
+    state: &WorkspaceState,
+    locks: &GitLocks,
+    id: u64,
+    name: &str,
+    url: &str,
+) -> AppResult<()> {
+    let root = project_root(state, id)?;
+    let lock = remote_guard(&root, locks)?;
+    let _guard = guard(&lock)?;
+    existing_remote(&root, name)?;
+    let url = remote_url(url)?;
+    local_write(
+        &root,
+        &["remote", "set-url", "--", name, url],
+        "修改远程仓库地址",
+    )
+}
+
+/// 重命名远程仓库（git remote rename），远程分支记录和本地分支的上游配置随之改名；返回新名称。
+pub fn rename_remote(
+    state: &WorkspaceState,
+    locks: &GitLocks,
+    id: u64,
+    name: &str,
+    target: &str,
+) -> AppResult<String> {
+    let root = project_root(state, id)?;
+    let lock = remote_guard(&root, locks)?;
+    let _guard = guard(&lock)?;
+    existing_remote(&root, name)?;
+    let target = remote_name(&root, target)?;
+    if target == name {
+        return Ok(target.to_owned());
+    }
+    if remote_names(&root)?.iter().any(|item| item == target) {
+        return Err(AppError::new(
+            "REMOTE",
+            format!("远程仓库 {target} 已存在。"),
+        ));
+    }
+    local_write(
+        &root,
+        &["remote", "rename", "--", name, target],
+        "重命名远程仓库",
+    )?;
+    Ok(target.to_owned())
+}
+
+/// 删除远程仓库配置（git remote remove）及本地的远程分支记录，跟踪它的本地分支失去上游；远程服务器不受影响。
+pub fn remove_remote(
+    state: &WorkspaceState,
+    locks: &GitLocks,
+    id: u64,
+    name: &str,
+) -> AppResult<()> {
+    let root = project_root(state, id)?;
+    let lock = remote_guard(&root, locks)?;
+    let _guard = guard(&lock)?;
+    existing_remote(&root, name)?;
+    local_write(&root, &["remote", "remove", "--", name], "删除远程仓库")
+}
+
 /// 网络操作的错误说明：常见的认证、主机密钥和网络问题附加处理建议。
 fn remote_failure(output: &Output) -> AppError {
     let error = failure(output);
@@ -667,7 +815,10 @@ pub fn fetch(state: &WorkspaceState, locks: &GitLocks, id: u64) -> AppResult<()>
     let root = project_root(state, id)?;
     let info = repo_info(&root)?.ok_or_else(|| AppError::new("GIT", "项目不在 Git 仓库内。"))?;
     if remote_names(&root)?.is_empty() {
-        return Err(AppError::new("REMOTE", "仓库没有配置远程仓库。"));
+        return Err(AppError::new(
+            "REMOTE",
+            "仓库没有配置远程仓库，可在分支弹窗的“远程仓库”中添加。",
+        ));
     }
     let lock = locks.get(&info.top)?;
     let _guard = guard(&lock)?;

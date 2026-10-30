@@ -8,10 +8,17 @@ import {
   GitBranch,
   GitBranchPlus,
   LoaderCircle,
+  Plus,
   RefreshCw,
   Search,
+  Server,
 } from 'lucide-react';
-import type { Branches, LocalBranch, RemoteBranch } from '../../lib/backend';
+import type {
+  Branches,
+  LocalBranch,
+  Remote,
+  RemoteBranch,
+} from '../../lib/backend';
 import { backend, errorMessage } from '../../lib/backend';
 
 /** 分支弹窗中选择的操作，由上层执行（含保存编辑、确认和刷新）。 */
@@ -28,7 +35,13 @@ export type BranchAction =
   | { kind: 'deleteRemote'; remote: string; branch: string }
   /** target 为目标分支的完整引用名，label 为其显示名。 */
   | { kind: 'merge'; target: string; label: string }
-  | { kind: 'rebase'; target: string; label: string };
+  | { kind: 'rebase'; target: string; label: string }
+  /** initial 为建议的名称：还没有远程仓库时为 origin。 */
+  | { kind: 'addRemote'; initial: string }
+  /** url 为列表中显示的地址，其中的密码已隐藏。 */
+  | { kind: 'editRemote'; name: string; url: string }
+  | { kind: 'renameRemote'; name: string }
+  | { kind: 'removeRemote'; name: string };
 
 interface Props {
   projectId: number;
@@ -46,7 +59,12 @@ const SHOWN = 200;
 
 type Target =
   | { kind: 'local'; branch: LocalBranch }
-  | { kind: 'remote'; branch: RemoteBranch };
+  | { kind: 'remote'; branch: RemoteBranch }
+  | { kind: 'repository'; remote: Remote };
+
+/** 操作菜单目标的名称。 */
+const targetName = (target: Target) =>
+  target.kind === 'repository' ? target.remote.name : target.branch.name;
 
 interface MenuEntry {
   label: string;
@@ -199,6 +217,27 @@ export function BranchPopup({
   }
 
   function entries(target: Target): MenuEntry[] {
+    if (target.kind === 'repository') {
+      const { name, url } = target.remote;
+      return [
+        {
+          label: '修改地址…',
+          disabled: remote,
+          action: { kind: 'editRemote', name, url },
+        },
+        {
+          label: '重命名…',
+          disabled: remote,
+          action: { kind: 'renameRemote', name },
+        },
+        {
+          label: '删除远程仓库…',
+          danger: true,
+          disabled: remote,
+          action: { kind: 'removeRemote', name },
+        },
+      ];
+    }
     if (target.kind === 'remote') {
       const { remote: name, branch } = target.branch;
       return [
@@ -266,18 +305,19 @@ export function BranchPopup({
 
   function row(target: Target, key: string) {
     const isLocal = target.kind === 'local';
-    const branch = target.branch;
+    const name = targetName(target);
     const currentRow = isLocal && target.branch.current;
     const opened =
-      flyout?.target.kind === target.kind &&
-      flyout.target.branch.name === branch.name;
+      flyout?.target.kind === target.kind && targetName(flyout.target) === name;
     const status = isLocal
       ? target.branch.gone
         ? '上游已删除'
         : target.branch.upstream
           ? `${target.branch.ahead ? `↑${target.branch.ahead} ` : ''}${target.branch.behind ? `↓${target.branch.behind} ` : ''}${target.branch.upstream}`
           : ''
-      : '';
+      : target.kind === 'repository'
+        ? target.remote.url
+        : '';
     return (
       <button
         key={key}
@@ -285,7 +325,13 @@ export function BranchPopup({
         aria-haspopup="menu"
         aria-expanded={opened}
         className={`${currentRow ? 'current' : ''} ${opened ? 'opened' : ''}`}
-        title={currentRow ? `${branch.name}（当前分支）` : branch.name}
+        title={
+          currentRow
+            ? `${name}（当前分支）`
+            : target.kind === 'repository'
+              ? `${name}\n${target.remote.url}`
+              : name
+        }
         onClick={(event) => open(target, event.currentTarget)}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -302,10 +348,12 @@ export function BranchPopup({
           <Check size={13} />
         ) : isLocal ? (
           <GitBranch size={13} />
+        ) : target.kind === 'repository' ? (
+          <Server size={13} />
         ) : (
           <Cloud size={13} />
         )}
-        <span className="branch-name">{branch.name}</span>
+        <span className="branch-name">{name}</span>
         {status && <kbd>{status}</kbd>}
         <ChevronRight size={12} className="branch-more" />
       </button>
@@ -467,18 +515,24 @@ export function BranchPopup({
                   : '远程分支过多，只读取了前 2,000 个'}
               </p>
             )}
-            {data.remotes.length > 0 && (
-              <>
-                <div className="context-separator" role="separator" />
-                <p className="menu-label">远程仓库</p>
-                {data.remotes.map((item) => (
-                  <p key={item.name} className="branch-remote" title={item.url}>
-                    <span>{item.name}</span>
-                    <span>{item.url}</span>
-                  </p>
-                ))}
-              </>
+            <div className="context-separator" role="separator" />
+            <p className="menu-label">远程仓库</p>
+            {data.remotes.map((item) =>
+              row({ kind: 'repository', remote: item }, `repo:${item.name}`),
             )}
+            <button
+              role="menuitem"
+              disabled={remote}
+              onClick={() =>
+                run({
+                  kind: 'addRemote',
+                  initial: data.remotes.length ? '' : 'origin',
+                })
+              }
+            >
+              <Plus size={13} />
+              <span>添加远程仓库…</span>
+            </button>
           </>
         )}
       </div>
@@ -487,7 +541,7 @@ export function BranchPopup({
           ref={flyoutRef}
           className="context-menu branch-flyout"
           role="menu"
-          aria-label={`${flyout.target.branch.name} 的操作`}
+          aria-label={`${targetName(flyout.target)} 的操作`}
           style={{ left: flyout.left, top: flyout.top }}
         >
           {entries(flyout.target).map((entry) => (

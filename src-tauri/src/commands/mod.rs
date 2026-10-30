@@ -553,6 +553,65 @@ pub async fn git_delete_remote_branch(
 }
 
 #[tauri::command]
+/// 添加远程仓库；返回远程仓库名。
+pub async fn git_add_remote(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    name: String,
+    url: String,
+) -> AppResult<String> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::add_remote(&state, &locks, project_id, &name, &url)).await
+}
+
+#[tauri::command]
+/// 修改远程仓库地址。
+pub async fn git_set_remote_url(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    name: String,
+    url: String,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::set_remote_url(&state, &locks, project_id, &name, &url)).await
+}
+
+#[tauri::command]
+/// 重命名远程仓库；返回新名称。
+pub async fn git_rename_remote(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    name: String,
+    target: String,
+) -> AppResult<String> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::rename_remote(&state, &locks, project_id, &name, &target)).await
+}
+
+#[tauri::command]
+/// 删除远程仓库配置。
+pub async fn git_remove_remote(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    name: String,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::remove_remote(&state, &locks, project_id, &name)).await
+}
+
+#[tauri::command]
 /// 切换到已有的本地分支。
 pub async fn git_switch_branch(
     workspaces: State<'_, Workspaces>,

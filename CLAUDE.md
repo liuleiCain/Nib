@@ -105,7 +105,7 @@ npm run desktop:build -- --bundles app
 | `src-tauri/src/watcher/mod.rs`          | 项目目录监听、事件合并，并推送给对应窗口                 |
 | `src-tauri/src/git/mod.rs`              | Git CLI 调用、状态解析、HEAD 版本读取、勾选提交          |
 | `src-tauri/src/git/history.rs`          | 提交记录分页、提交详情与历史 Diff                        |
-| `src-tauri/src/git/remote.rs`           | 本地/远程分支与分支操作，Fetch、Push、仅快进 Pull        |
+| `src-tauri/src/git/remote.rs`           | 分支与分支操作、远程仓库管理，Fetch、Push、仅快进 Pull   |
 | `src-tauri/src/git/merge.rs`            | 合并、变基，冲突标记已解决、完成/继续、跳过与中止        |
 | `src-tauri/src/search/mod.rs`           | 快速打开文件列表、可取消的项目文本搜索                   |
 | `src-tauri/src/settings/mod.rs`         | 编辑器设置的读写与校验                                   |
@@ -118,7 +118,7 @@ npm run desktop:build -- --bundles app
 | `src-tauri/tauri.conf.json`             | 窗口、构建、打包及 CSP                                   |
 | `src-tauri/capabilities/default.json`   | 目录选择与窗口能力权限                                   |
 
-当前自定义命令：`window_startup`、`open_project`、`open_project_window`、`new_window`、`close_project`、`recent_projects`、`forget_project`、`save_tabs`、`cancel_quit`、`list_directory`、`read_file`、`save_file`、`git_status`、`git_diff`、`git_head_file`、`git_commit`、`git_restore`、`git_add`、`git_rollback`、`git_ignore`、`git_log`、`git_commit_detail`、`git_commit_diff`、`git_branches`、`git_create_branch`、`git_switch_branch`、`git_checkout_remote`、`git_rename_branch`、`git_delete_branch`、`git_delete_remote_branch`、`git_fetch`、`git_pull`、`git_push`、`git_merge`、`git_rebase`、`git_resolve`、`git_continue`、`git_skip`、`git_abort`、`create_entry`、`rename_entry`、`trash_entry`、`reveal_entry`、`search_files`、`search_text`、`cancel_search`、`get_settings`、`save_settings`、`get_layout`、`save_sidebar_width`、`recovery_save`、`recovery_discard`、`recovery_list`。
+当前自定义命令：`window_startup`、`open_project`、`open_project_window`、`new_window`、`close_project`、`recent_projects`、`forget_project`、`save_tabs`、`cancel_quit`、`list_directory`、`read_file`、`save_file`、`git_status`、`git_diff`、`git_head_file`、`git_commit`、`git_restore`、`git_add`、`git_rollback`、`git_ignore`、`git_log`、`git_commit_detail`、`git_commit_diff`、`git_branches`、`git_create_branch`、`git_switch_branch`、`git_checkout_remote`、`git_rename_branch`、`git_delete_branch`、`git_delete_remote_branch`、`git_add_remote`、`git_set_remote_url`、`git_rename_remote`、`git_remove_remote`、`git_fetch`、`git_pull`、`git_push`、`git_merge`、`git_rebase`、`git_resolve`、`git_continue`、`git_skip`、`git_abort`、`create_entry`、`rename_entry`、`trash_entry`、`reveal_entry`、`search_files`、`search_text`、`cancel_search`、`get_settings`、`save_settings`、`get_layout`、`save_sidebar_width`、`recovery_save`、`recovery_discard`、`recovery_list`。
 
 ## 6. 已执行的验证及边界
 
@@ -163,7 +163,7 @@ Git 实现约束（后续 Git 功能继续遵守）：
 
 ### 阶段三：日常使用能力
 
-- 已实现 Git 部分：提交记录分页与只读提交 Diff、本地与远程分支列表及 GoLand 式分支操作菜单（切换、从任意分支新建、检出远程分支、重命名、删除本地/远程分支）、远程地址与上游信息、Fetch / Push / 仅快进 Pull、合并与变基（冲突在编辑器中解决后标记已解决，可完成/继续、跳过、中止）（设计见 `docs/architecture.md` Git 一节，限制见 `docs/roadmap.md`，真实窗口交互待验收）。
+- 已实现 Git 部分：提交记录分页与只读提交 Diff、本地与远程分支列表及 GoLand 式分支操作菜单（切换、从任意分支新建、检出远程分支、重命名、删除本地/远程分支）、远程地址与上游信息、远程仓库管理（添加、修改地址、重命名、删除）、Fetch / Push / 仅快进 Pull、合并与变基（冲突在编辑器中解决后标记已解决，可完成/继续、跳过、中止）（设计见 `docs/architecture.md` Git 一节，限制见 `docs/roadmap.md`，真实窗口交互待验收）。
 - 已实现：Cmd/Ctrl+P 快速打开（模糊匹配、`路径:行号`）；Cmd/Ctrl+Shift+F 项目搜索（按文件分组、可取消、限制结果数、排除 `.git`、默认尊重 `.gitignore`）；命令面板补充已实现操作；字体、字号、缩进、自动换行、自动保存设置（`~/.nib/settings.json`，带版本号，经 Rust 读写）；窗口与侧边栏尺寸恢复；未保存内容的本地恢复（`~/.nib/recovery/`，与配置、项目文件分开存储）。设计见 `docs/architecture.md`，限制见 `docs/roadmap.md`，真实窗口交互待验收。
 
 ### 阶段四：稳定性和性能

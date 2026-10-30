@@ -378,6 +378,17 @@ export const backend = {
     invoke<void>('git_delete_branch', { projectId, name, force }),
   gitDeleteRemoteBranch: (projectId: number, remote: string, branch: string) =>
     invoke<void>('git_delete_remote_branch', { projectId, remote, branch }),
+  /** 添加远程仓库，只写配置不连接；返回远程仓库名。 */
+  gitAddRemote: (projectId: number, name: string, url: string) =>
+    invoke<string>('git_add_remote', { projectId, name, url }),
+  gitSetRemoteUrl: (projectId: number, name: string, url: string) =>
+    invoke<void>('git_set_remote_url', { projectId, name, url }),
+  /** 重命名远程仓库，远程分支和上游配置随之改名；返回新名称。 */
+  gitRenameRemote: (projectId: number, name: string, target: string) =>
+    invoke<string>('git_rename_remote', { projectId, name, target }),
+  /** 删除远程仓库配置及本地的远程分支记录，远程服务器不受影响。 */
+  gitRemoveRemote: (projectId: number, name: string) =>
+    invoke<void>('git_remove_remote', { projectId, name }),
   gitSwitchBranch: (projectId: number, name: string) =>
     invoke<void>('git_switch_branch', { projectId, name }),
   gitFetch: (projectId: number) => invoke<void>('git_fetch', { projectId }),
