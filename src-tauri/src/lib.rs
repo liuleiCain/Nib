@@ -1,6 +1,7 @@
 mod commands;
 mod error;
 mod filesystem;
+mod git;
 mod session;
 mod watcher;
 mod window;
@@ -10,6 +11,7 @@ use std::sync::Arc;
 
 use tauri::{Emitter, Manager};
 
+use git::GitLocks;
 use session::SessionStore;
 use watcher::Watchers;
 use workspace::Workspaces;
@@ -21,6 +23,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Workspaces::default())
         .manage(Watchers::default())
+        .manage(GitLocks::default())
         .setup(|app| {
             // 会话数据放在用户目录的 .nib 下，删除该目录即清空所有记录。
             let sessions = Arc::new(SessionStore::load(app.path().home_dir()?.join(".nib")));
@@ -61,6 +64,18 @@ pub fn run() {
             commands::list_directory,
             commands::read_file,
             commands::save_file,
+            commands::git_status,
+            commands::git_diff,
+            commands::git_head_file,
+            commands::git_commit,
+            commands::git_restore,
+            commands::git_add,
+            commands::git_rollback,
+            commands::git_ignore,
+            commands::create_entry,
+            commands::rename_entry,
+            commands::trash_entry,
+            commands::reveal_entry,
         ])
         .build(tauri::generate_context!())
         .expect("Nib 启动失败")

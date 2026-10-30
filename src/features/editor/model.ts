@@ -1,11 +1,12 @@
-import type {ChangeSpec, Extension, Text} from '@codemirror/state';
-import {Compartment, EditorState} from '@codemirror/state';
-import {EditorView, keymap} from '@codemirror/view';
-import {basicSetup} from 'codemirror';
-import {indentWithTab} from '@codemirror/commands';
-import {HighlightStyle, syntaxHighlighting} from '@codemirror/language';
-import {tags} from '@lezer/highlight';
-import type {Document} from '../../lib/backend';
+import type { ChangeSpec, Extension, Text } from '@codemirror/state';
+import { Compartment, EditorState } from '@codemirror/state';
+import { EditorView, keymap } from '@codemirror/view';
+import { basicSetup } from 'codemirror';
+import { indentWithTab } from '@codemirror/commands';
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { tags } from '@lezer/highlight';
+import type { Document } from '../../lib/backend';
+import { gitChanges } from '../git/changes';
 
 /** 标签保存独立的编辑器状态，切换时保留撤销历史、选区和滚动位置。 */
 export interface Tab {
@@ -116,7 +117,11 @@ export function languageName(path: string): string {
   );
 }
 
-async function language(path: string): Promise<Extension> {
+/** 编辑器与 Diff 视图共用的配色和主题。 */
+export { highlight as editorHighlight, theme as editorTheme };
+
+/** 按文件后缀按需加载语言支持。 */
+export async function language(path: string): Promise<Extension> {
   const extension = path.split('.').pop()?.toLowerCase();
   switch (extension) {
     case 'go':
@@ -164,6 +169,7 @@ export async function createTab(
       editableCompartment.of(EditorView.editable.of(true)),
       EditorState.tabSize.of(4),
       EditorState.readOnly.of(document.truncated),
+      gitChanges,
     ],
   });
   return {
@@ -214,10 +220,16 @@ export const isDirty = (tab: Tab): boolean => !tab.state.doc.eq(tab.savedDoc);
 
 /** 保存前还原文件原有的 BOM 和换行符。 */
 export function serialize(tab: Tab): string {
-  const newline =
-    tab.newline === 'CRLF' ? '\r\n' : tab.newline === 'CR' ? '\r' : '\n';
-  return (
-    (tab.hasBom ? '\uFEFF' : '') +
-    tab.state.doc.toString().replaceAll('\n', newline)
-  );
+  return encode(tab.state.doc.toString(), tab.newline, tab.hasBom);
+}
+
+/** 把内部 LF 文本还原为指定的换行符和 BOM。 */
+export function encode(
+  text: string,
+  newline: Document['newline'],
+  hasBom: boolean,
+): string {
+  const separator =
+    newline === 'CRLF' ? '\r\n' : newline === 'CR' ? '\r' : '\n';
+  return (hasBom ? '\uFEFF' : '') + text.replaceAll('\n', separator);
 }

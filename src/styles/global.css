@@ -12,6 +12,16 @@
   --muted: #818b94;
   --faint: #59646e;
   --accent: #94bdaf;
+  /* Git 状态色，对深色背景的对比度均不低于 3:1；用法见下方 Git 状态着色。 */
+  --git-added: #5ccf9a;
+  --git-modified: #e8c062;
+  --git-renamed: #6fa8ff;
+  --git-untracked: #a3abb3;
+  --git-deleted: #6a737b;
+  --git-conflicted: #ff6b6b;
+  /* Diff 删除 / 插入使用橙与青，色弱下仍对比明显。 */
+  --diff-deleted: #e0884f;
+  --diff-inserted: #45b8c4;
   color: var(--text);
   background: var(--bg);
   color-scheme: dark;
@@ -272,9 +282,18 @@ kbd {
   color: #d2ded9;
   box-shadow: inset 2px 0 #8fb6a9;
 }
-.tree-row span:last-child {
+.tree-row > span:not(.tree-indent, .tree-git) {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.tree-row .tree-git {
+  margin-left: auto;
+  padding-left: 6px;
+  overflow: visible;
+  font-family: var(--editor-font);
+  font-size: 10px;
+  font-weight: 600;
 }
 .tree-indent {
   width: 13px;
@@ -1075,4 +1094,584 @@ h1 span {
   .welcome-description {
     margin-bottom: 18px;
   }
+}
+
+/*
+ * Git 状态着色：新增绿、修改黄、重命名蓝、未跟踪灰、删除深灰、冲突红。
+ * 配色按红绿、蓝黄色弱模拟校验过可区分；颜色只是辅助，每种状态另有字母、字形或形状区分，
+ * 色盲用户不依赖颜色也能识别。
+ */
+.git-added {
+  color: var(--git-added) !important;
+}
+.git-modified {
+  color: var(--git-modified) !important;
+}
+.git-renamed {
+  color: var(--git-renamed) !important;
+}
+.git-untracked {
+  color: var(--git-untracked) !important;
+  font-style: italic;
+}
+.git-deleted {
+  color: var(--git-deleted) !important;
+}
+.git-conflicted {
+  color: var(--git-conflicted) !important;
+  font-weight: 600;
+}
+.change-name.git-deleted .change-file {
+  text-decoration: line-through;
+}
+.git-dir {
+  color: #c9b77f;
+}
+
+.sidebar-tabs {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+}
+.sidebar-tabs button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 4px;
+  color: #7f8b92;
+  font-size: 11px;
+  font-weight: 500;
+}
+.sidebar-tabs button:hover:not(:disabled) {
+  color: #c5d0cd;
+  background: #ffffff06;
+}
+.sidebar-tabs button.active {
+  color: #c9d5d2;
+  background: #ffffff0a;
+}
+.sidebar-tabs button.active svg {
+  color: var(--accent);
+}
+.sidebar-badge {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #4c6b8c;
+  color: #e3ebf3;
+  font-size: 9px;
+  line-height: 15px;
+  text-align: center;
+}
+
+.commit-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.commit-toolbar {
+  height: 34px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px 0 13px;
+}
+.commit-branch {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #a9b5bb;
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.commit-branch svg {
+  color: var(--accent);
+}
+.commit-branch span {
+  color: #7e8b93;
+  font-weight: 400;
+}
+.change-list {
+  flex: 1;
+  min-height: 60px;
+  overflow: auto;
+  padding-bottom: 8px;
+}
+.change-group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px 0 6px;
+  color: #b4c0c3;
+  font-size: 11px;
+  font-weight: 600;
+}
+.change-group-title button {
+  display: flex;
+  padding: 2px;
+  color: #77848c;
+}
+.change-group-title .change-group-action {
+  gap: 3px;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+.change-group-title .change-group-action:hover {
+  color: var(--text);
+  background: #ffffff10;
+}
+.change-count {
+  margin-left: auto;
+  color: #5f6c75;
+  font-size: 10px;
+  font-weight: 400;
+}
+.change-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding-right: 10px;
+}
+.change-row:hover {
+  background: #ffffff04;
+}
+.change-row.selected {
+  background: #8fb6a914;
+  box-shadow: inset 2px 0 #8fb6a9;
+}
+.change-row input,
+.change-group-title input {
+  margin: 0;
+  width: 13px;
+  height: 13px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+.change-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  height: 100%;
+  padding: 0;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  font-size: 12px;
+}
+.change-file {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  max-width: 100%;
+  line-height: 26px;
+}
+/* 已删除文件的恢复按钮：悬停或键盘聚焦该行时显示。 */
+.change-restore {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 3px;
+  color: var(--muted);
+  opacity: 0;
+}
+.change-row:hover .change-restore,
+.change-row:focus-within .change-restore {
+  opacity: 1;
+}
+.change-restore:hover {
+  color: var(--text);
+  background: #ffffff10;
+}
+.change-dir {
+  color: #5d6a73;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.change-letter {
+  width: 12px;
+  flex-shrink: 0;
+  text-align: center;
+  font-family: var(--editor-font);
+  font-size: 10px;
+  font-weight: 600;
+}
+.change-folder {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding-right: 10px;
+  color: #8e9aa2;
+  font-size: 11px;
+  text-align: left;
+  white-space: nowrap;
+}
+.change-folder:hover {
+  background: #ffffff04;
+}
+.change-folder span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.change-empty {
+  margin: 0;
+  padding: 18px 16px;
+  color: #5f6c75;
+  font-size: 11px;
+}
+.change-error {
+  margin: 8px 12px;
+  color: #c3a094;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.commit-box {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--border);
+}
+.commit-box textarea {
+  height: 92px;
+  resize: vertical;
+  min-height: 52px;
+  max-height: 320px;
+  padding: 8px 9px;
+  background: #15191c;
+  color: var(--text);
+  border: 1px solid #343d44;
+  border-radius: 4px;
+  font: 12px/1.55 var(--ui-font);
+}
+.commit-box textarea:focus {
+  outline: none;
+  border-color: #5f7d71;
+}
+.commit-scope {
+  margin: 0;
+  color: #7d8a92;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.commit-button {
+  align-self: flex-end;
+  padding: 7px 16px;
+}
+.git-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 55px 22px 0;
+  text-align: center;
+  color: #58676e;
+}
+.git-empty p {
+  margin: 8px 0 2px;
+  color: #9ba8b0;
+  font-size: 12px;
+}
+.git-empty span {
+  color: #66737c;
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.git-empty .secondary-button {
+  margin-top: 14px;
+}
+
+.diff-tab svg:first-child {
+  color: #7ea6d4 !important;
+}
+.breadcrumb-git {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+.breadcrumb-git:hover {
+  background: #ffffff08;
+}
+.diff-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: var(--bg);
+}
+.diff-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.diff-toolbar {
+  height: 34px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px 0 18px;
+  border-bottom: 1px solid #ffffff06;
+  font-size: 11px;
+  color: #7f8b93;
+}
+.diff-sides {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.diff-sides span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.diff-count {
+  color: #9aa7ae;
+}
+.diff-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.diff-actions .secondary-button {
+  margin-left: 8px;
+  padding: 4px 9px;
+  font-size: 10px;
+}
+.diff-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 26px 22px;
+  color: #8a969d;
+  font-size: 12px;
+}
+.diff-message.error {
+  color: #d7a998;
+}
+.diff-host {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.diff-host.unified > .cm-editor {
+  height: 100%;
+}
+.diff-host .cm-mergeView {
+  min-height: 100%;
+}
+.diff-host .cm-mergeViewEditor + .cm-mergeViewEditor {
+  border-left: 1px solid var(--border);
+}
+/* Diff 删除侧用橙、插入侧用青，避免红绿；两侧本身也由左右位置区分。 */
+.diff-host .cm-merge-a .cm-changedLine,
+.diff-host .cm-deletedChunk {
+  background-color: #e0884f17 !important;
+}
+.diff-host .cm-merge-b .cm-changedLine,
+.diff-host .cm-changedLine,
+.diff-host .cm-insertedLine {
+  background-color: #45b8c414 !important;
+}
+.diff-host .cm-merge-a .cm-changedText,
+.diff-host .cm-deletedChunk .cm-deletedText {
+  background: #e0884f45 !important;
+}
+.diff-host .cm-deletedChunk .cm-deletedText {
+  text-decoration: line-through #e0884f99;
+}
+.diff-host .cm-merge-b .cm-changedText,
+.diff-host .cm-insertedLine .cm-changedText {
+  background: #45b8c445 !important;
+}
+.diff-host .cm-merge-a .cm-changedLineGutter,
+.diff-host .cm-deletedLineGutter {
+  background: var(--diff-deleted) !important;
+}
+.diff-host .cm-merge-b .cm-changedLineGutter,
+.diff-host .cm-changedLineGutter {
+  background: var(--diff-inserted) !important;
+}
+/* 回滚按钮：左右对比时在两栏之间，统一视图在变更块右上角。 */
+.diff-host .cm-merge-revert {
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+}
+.diff-host .cm-merge-revert button.diff-revert {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.2;
+}
+.diff-host .cm-merge-revert button.diff-revert:hover {
+  color: var(--text);
+  background: #ffffff10;
+}
+.diff-host .cm-deletedChunk .cm-chunkButtons {
+  z-index: 1;
+}
+.diff-host .cm-deletedChunk button.diff-revert {
+  color: #d1ddd8;
+  background: #2f373d;
+  border: 1px solid #3a444b;
+  font-family: var(--ui-font);
+  font-size: 11px;
+  padding: 1px 8px;
+}
+.diff-host .cm-deletedChunk button.diff-revert:hover {
+  background: #3a444b;
+}
+.diff-host .cm-collapsedLines {
+  color: #8a969d !important;
+  background: #23292e !important;
+  font-family: var(--ui-font);
+  font-size: 11px;
+}
+
+.status-git {
+  flex: 1;
+  justify-content: flex-start;
+  padding-left: 18px;
+}
+.status-git button {
+  gap: 5px;
+}
+.status-git button span {
+  color: #66737b;
+}
+.status-git .status-operation {
+  color: #d0a070;
+}
+.status-muted {
+  color: #5c6870;
+}
+.commit-unsaved {
+  display: block;
+  color: #b9ab82;
+}
+
+/* 文件树右键菜单 */
+.tree-row.marked:not(.selected) {
+  background: #ffffff08;
+  box-shadow: inset 0 0 0 1px #8fb6a955;
+}
+.context-menu {
+  position: fixed;
+  z-index: 30;
+  min-width: 220px;
+  padding: 4px;
+  background: #242b30;
+  border: 1px solid #3c474d;
+  border-radius: 6px;
+  box-shadow: 0 12px 40px #0006;
+}
+.context-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  color: #c3ced0;
+  font-size: 12px;
+  text-align: left;
+}
+.context-menu button:hover,
+.context-menu button:focus-visible {
+  background: #8fb6a92b;
+  color: #e3ecea;
+  outline: none;
+}
+.context-menu button.danger {
+  color: #d9a98f;
+}
+.context-menu kbd {
+  margin-left: auto;
+  color: #6f7c84;
+  font-family: var(--ui-font);
+  font-size: 11px;
+}
+.context-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: #343e44;
+}
+
+/* 新建、重命名的名称输入框 */
+.name-dialog h2 {
+  margin-bottom: 16px;
+  overflow-wrap: anywhere;
+}
+.name-input {
+  width: 100%;
+  padding: 8px 10px;
+  background: #181e22;
+  border: 1px solid #3a444b;
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--editor-font);
+  font-size: 12px;
+  outline: none;
+}
+.name-input:focus {
+  border-color: #8fb6a9;
+}
+.name-input[aria-invalid='true'] {
+  border-color: #d9a98f;
+}
+.unsaved-dialog p.name-error {
+  min-height: 20px;
+  margin: 6px 0 14px;
+  color: #d9a98f;
+}
+
+/* 回滚、删除等难以撤销的操作的确认按钮 */
+.danger-button {
+  margin-left: auto;
+  padding: 9px 15px;
+  border: 1px solid #b07a5f;
+  border-radius: 4px;
+  background: #b07a5f26;
+  color: #f0c7b1;
+  font-size: 11px;
+  font-weight: 500;
+}
+.danger-button:hover {
+  background: #b07a5f40;
+}
+.unsaved-dialog .dialog-note {
+  display: block;
+  margin-top: 8px;
+  color: #d9a98f;
+  font-weight: 500;
 }

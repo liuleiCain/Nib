@@ -11,7 +11,27 @@ import {
   RotateCw,
 } from 'lucide-react';
 import { backend, errorMessage } from '../../lib/backend';
-import type { Directory, FileEntry, Project } from '../../lib/backend';
+import { changeStyle } from '../git/CommitPanel';
+import type { TreeShortcut } from './ContextMenu';
+import { shortcut } from './ContextMenu';
+import type {
+  ChangeKind,
+  Directory,
+  FileEntry,
+  Project,
+} from '../../lib/backend';
+
+/** 文件树中被操作的条目；项目根目录的 path 为空字符串。 */
+export interface TreeTarget {
+  path: string;
+  isDir: boolean;
+}
+
+/** 展开到指定目录的请求；key 递增触发。 */
+export interface TreeReveal {
+  key: number;
+  path: string;
+}
 
 /** 外部文件变化通知；key 递增触发刷新，paths 为空表示刷新全部已加载目录。 */
 export interface TreeChanges {
@@ -23,7 +43,16 @@ interface Props {
   project: Project;
   selected: string | null;
   changes: TreeChanges;
+  /** 变更文件的 Git 状态，用于文件名着色。 */
+  gitKinds: Map<string, ChangeKind>;
+  /** 含已跟踪变更的目录。 */
+  gitDirs: Set<string>;
+  /** 右键菜单作用的条目，高亮显示。 */
+  marked: string | null;
+  reveal: TreeReveal;
   onOpen: (path: string) => void;
+  onContextMenu: (target: TreeTarget, x: number, y: number) => void;
+  onShortcut: (target: TreeTarget, shortcut: TreeShortcut) => void;
 }
 
 interface Branch {
@@ -33,7 +62,18 @@ interface Branch {
 }
 
 /** 每次只读取展开目录；外部变化时只重读受影响的已加载目录，项目切换后丢弃迟到的响应。 */
-export function Explorer({ project, selected, changes, onOpen }: Props) {
+export function Explorer({
+  project,
+  selected,
+  changes,
+  gitKinds,
+  gitDirs,
+  marked,
+  reveal,
+  onOpen,
+  onContextMenu,
+  onShortcut,
+}: Props) {
   const [branches, setBranches] = useState<Record<string, Branch>>({});
   const [expanded, setExpanded] = useState(new Set(['']));
   const generation = useRef(0);
@@ -95,6 +135,15 @@ export function Explorer({ project, selected, changes, onOpen }: Props) {
     for (const path of targets) if (path in branches) void load(path);
   }, [changes.key]);
 
+  // 新建条目后展开所在目录及其上级目录。
+  useEffect(() => {
+    if (!reveal.key) return;
+    const parts = reveal.path.split('/').filter(Boolean);
+    const paths = parts.map((_, index) => parts.slice(0, index + 1).join('/'));
+    setExpanded((previous) => new Set([...previous, ...paths]));
+    for (const path of ['', ...paths]) void load(path);
+  }, [reveal.key]);
+
   function toggle(entry: FileEntry) {
     if (!entry.isDir) {
       onOpen(entry.path);
@@ -143,10 +192,22 @@ export function Explorer({ project, selected, changes, onOpen }: Props) {
               aria-expanded={entry.isDir ? expanded.has(entry.path) : undefined}
               aria-selected={selected === entry.path}
               aria-level={depth + 1}
-              className={`tree-row ${selected === entry.path ? 'selected' : ''}`}
+              className={`tree-row ${selected === entry.path ? 'selected' : ''} ${marked === entry.path ? 'marked' : ''}`}
               style={{ paddingLeft: 12 + depth * 14 }}
               title={entry.path}
               onClick={() => toggle(entry)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onContextMenu(entry, event.clientX, event.clientY);
+              }}
+              onKeyDown={(event) => {
+                const action = shortcut(event);
+                if (!action) return;
+                event.preventDefault();
+                event.stopPropagation();
+                onShortcut(entry, action);
+              }}
             >
               {entry.isDir ? (
                 expanded.has(entry.path) ? (
@@ -170,7 +231,28 @@ export function Explorer({ project, selected, changes, onOpen }: Props) {
               ) : (
                 <File size={14} />
               )}
-              <span>{entry.name}</span>
+              <span
+                className={
+                  entry.isDir
+                    ? gitDirs.has(entry.path)
+                      ? 'git-dir'
+                      : undefined
+                    : gitKinds.has(entry.path)
+                      ? `git-${gitKinds.get(entry.path)}`
+                      : undefined
+                }
+              >
+                {entry.name}
+              </span>
+              {!entry.isDir && gitKinds.has(entry.path) && (
+                // 字母与颜色同时标示状态，不依赖颜色辨认。
+                <span
+                  className={`tree-git git-${gitKinds.get(entry.path)}`}
+                  title={changeStyle[gitKinds.get(entry.path)!].label}
+                >
+                  {changeStyle[gitKinds.get(entry.path)!].letter}
+                </span>
+              )}
             </button>
             {entry.isDir && expanded.has(entry.path) && (
               <div role="group">{directory(entry.path, depth + 1)}</div>
@@ -188,7 +270,17 @@ export function Explorer({ project, selected, changes, onOpen }: Props) {
 
   return (
     <>
-      <div className="project-tree-header">
+      <div
+        className="project-tree-header"
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onContextMenu(
+            { path: '', isDir: true },
+            event.clientX,
+            event.clientY,
+          );
+        }}
+      >
         <span>
           <ChevronDown size={13} /> {project.name}
         </span>
@@ -203,7 +295,19 @@ export function Explorer({ project, selected, changes, onOpen }: Props) {
           <RotateCw size={13} />
         </button>
       </div>
-      <div className="file-tree" role="tree" aria-label="项目文件">
+      <div
+        className="file-tree"
+        role="tree"
+        aria-label="项目文件"
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onContextMenu(
+            { path: '', isDir: true },
+            event.clientX,
+            event.clientY,
+          );
+        }}
+      >
         {directory('', 0)}
       </div>
       <div className="explorer-note">按需加载 · 隐藏构建与依赖目录</div>

@@ -272,3 +272,160 @@ pub fn save(
         .map_err(|error| AppError::from(error.error))?;
     Ok(revision(content.as_bytes()))
 }
+
+/// 新建、重命名使用的单级名称：不能为空、`.`、`..`，不能含路径分隔符或 NUL，不能是 `.git`。
+fn valid_name(name: &str) -> AppResult<&str> {
+    let name = name.trim_end_matches(['\r', '\n']);
+    if name.trim().is_empty() {
+        return Err(AppError::new("NAME", "名称不能为空。"));
+    }
+    if name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
+        return Err(AppError::new(
+            "NAME",
+            "名称不能是 . 或 ..，也不能包含 / 或 \\。",
+        ));
+    }
+    if name.eq_ignore_ascii_case(".git") {
+        return Err(AppError::new("NAME", "不能使用 .git 作为名称。"));
+    }
+    Ok(name)
+}
+
+/// 父目录相对路径与名称拼接为项目相对路径。
+fn join(parent: &str, name: &str) -> String {
+    if parent.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{parent}/{name}")
+    }
+}
+
+/// target 是否已存在；大小写不敏感的文件系统上只改大小写时，target 与 source 是同一文件，不算存在。
+fn occupied(source: Option<&std::path::Path>, target: &std::path::Path) -> bool {
+    let Ok(existing) = fs::symlink_metadata(target) else {
+        return false;
+    };
+    #[cfg(unix)]
+    if let Some(Ok(original)) = source.map(fs::symlink_metadata) {
+        use std::os::unix::fs::MetadataExt;
+        return !(existing.dev() == original.dev() && existing.ino() == original.ino());
+    }
+    let _ = (source, existing);
+    true
+}
+
+/// 在 parent 目录下新建空文件或目录，返回新条目的项目相对路径；同名条目已存在时拒绝。
+pub fn create(
+    state: &WorkspaceState,
+    id: u64,
+    parent: &str,
+    name: &str,
+    directory: bool,
+) -> AppResult<String> {
+    let name = valid_name(name)?;
+    let workspace = state.lock()?;
+    let relative = join(parent, name);
+    let target = workspace.entry(id, &relative)?;
+    if !target.parent().is_some_and(std::path::Path::is_dir) {
+        return Err(AppError::new("PATH", "所在目录不存在或不是目录。"));
+    }
+    if occupied(None, &target) {
+        return Err(AppError::new(
+            "EXISTS",
+            format!("已存在名为 {name} 的文件或目录。"),
+        ));
+    }
+    if directory {
+        fs::create_dir(&target)?;
+    } else {
+        // create_new 保证不会覆盖检查之后才出现的同名文件。
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)?;
+    }
+    Ok(relative)
+}
+
+/// 校验重命名：源条目存在、新名称有效且同目录下没有同名条目，返回新的项目相对路径。
+pub fn rename_target(state: &WorkspaceState, id: u64, path: &str, name: &str) -> AppResult<String> {
+    let name = valid_name(name)?;
+    let workspace = state.lock()?;
+    let source = workspace.entry(id, path)?;
+    fs::symlink_metadata(&source)?;
+    let relative = join(path.rsplit_once('/').map_or("", |(parent, _)| parent), name);
+    let target = workspace.entry(id, &relative)?;
+    if occupied(Some(&source), &target) {
+        return Err(AppError::new(
+            "EXISTS",
+            format!("已存在名为 {name} 的文件或目录。"),
+        ));
+    }
+    Ok(relative)
+}
+
+/// 直接在磁盘上重命名（未被 Git 跟踪的条目）；持锁后再次确认目标不存在。
+pub fn rename(state: &WorkspaceState, id: u64, from: &str, to: &str) -> AppResult<()> {
+    let workspace = state.lock()?;
+    let source = workspace.entry(id, from)?;
+    let target = workspace.entry(id, to)?;
+    if occupied(Some(&source), &target) {
+        return Err(AppError::new("EXISTS", "目标名称已被占用，未重命名。"));
+    }
+    fs::rename(&source, &target)?;
+    Ok(())
+}
+
+/// 移到系统废纸篓，可从废纸篓找回；符号链接只移走链接本身。
+pub fn trash(state: &WorkspaceState, id: u64, path: &str) -> AppResult<()> {
+    let workspace = state.lock()?;
+    let target = workspace.entry(id, path)?;
+    fs::symlink_metadata(&target)?;
+    let mut context = trash::TrashContext::default();
+    // 默认的访达方式需要“自动化”授权，改用系统文件管理接口，不弹授权请求。
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        context.set_delete_method(DeleteMethod::NsFileManager);
+    }
+    context
+        .delete(&target)
+        .map_err(|error| AppError::new("TRASH", format!("移到废纸篓失败：{error}")))
+}
+
+/// 在系统文件管理器中显示并选中条目；path 为空时显示项目根目录。
+pub fn reveal(state: &WorkspaceState, id: u64, path: &str) -> AppResult<()> {
+    let target = {
+        let workspace = state.lock()?;
+        if path.is_empty() {
+            std::path::PathBuf::from(workspace.root_text(id)?)
+        } else {
+            workspace.entry(id, path)?
+        }
+    };
+    fs::symlink_metadata(&target)?;
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("/usr/bin/open")
+        .arg("-R")
+        .arg(&target)
+        .status();
+    #[cfg(target_os = "windows")]
+    let status = std::process::Command::new("explorer")
+        .arg("/select,")
+        .arg(&target)
+        .status();
+    // 其他平台没有统一的选中接口，打开所在目录。
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let status = std::process::Command::new("xdg-open")
+        .arg(target.parent().unwrap_or(&target))
+        .status();
+    match status {
+        // Windows 资源管理器即使成功也可能返回非零状态，只把无法启动视为失败。
+        Ok(status) if status.success() || cfg!(target_os = "windows") => Ok(()),
+        Ok(_) => Err(AppError::new("REVEAL", "无法在文件管理器中显示。")),
+        Err(error) => Err(AppError::new(
+            "REVEAL",
+            format!("无法打开文件管理器：{error}"),
+        )),
+    }
+}

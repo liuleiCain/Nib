@@ -86,6 +86,39 @@ impl Workspace {
         Ok(resolved)
     }
 
+    /// 文件树条目自身的绝对路径：只解析父目录，末级为符号链接时指向链接本身，不跟随。
+    ///
+    /// 用于新建、重命名、删除；不允许操作项目根目录，父目录解析后仍须在项目内。
+    pub fn entry(&self, id: u64, relative: &str) -> AppResult<PathBuf> {
+        if self.id != id {
+            return Err(AppError::new("STALE", "项目已切换，请重试。"));
+        }
+        let root = self
+            .root
+            .as_ref()
+            .ok_or_else(|| AppError::new("WORKSPACE", "请先打开项目。"))?;
+        let path = Path::new(relative);
+        let name = path.file_name();
+        if name.is_none()
+            || path
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_)))
+        {
+            return Err(AppError::new("PATH", "不允许访问项目之外的路径。"));
+        }
+        let parent = match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => root.join(parent).canonicalize()?,
+            _ => root.clone(),
+        };
+        if !parent.starts_with(root) {
+            return Err(AppError::new(
+                "PATH",
+                "此路径经符号链接指向项目之外，暂不支持操作。",
+            ));
+        }
+        Ok(parent.join(name.unwrap_or_default()))
+    }
+
     /// 当前项目的根目录文本，未打开项目时为空。
     pub fn current_root(&self) -> Option<String> {
         self.root

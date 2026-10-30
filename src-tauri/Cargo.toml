@@ -21,6 +21,7 @@ serde_json = "1"
 sha2 = "0.10"
 tempfile = "3"
 notify = "8.2.1"
+trash = "=5.2.9"
 
 # macOS 原生窗口标签；与 Tauri 依赖的版本一致，不引入新包。
 [target.'cfg(target_os = "macos")'.dependencies]

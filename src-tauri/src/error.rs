@@ -26,7 +26,13 @@ impl From<tauri::Error> for AppError {
 
 impl From<std::io::Error> for AppError {
     fn from(error: std::io::Error) -> Self {
-        Self::new("IO", format!("文件操作失败：{error}"))
+        // 文件不存在单独标记，前端据此区分“已被删除”和其他读写失败。
+        let code = if error.kind() == std::io::ErrorKind::NotFound {
+            "NOT_FOUND"
+        } else {
+            "IO"
+        };
+        Self::new(code, format!("文件操作失败：{error}"))
     }
 }
 

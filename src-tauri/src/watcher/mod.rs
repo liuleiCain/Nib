@@ -33,6 +33,8 @@ pub struct Changes {
     pub project_id: u64,
     pub paths: Vec<String>,
     pub rescan: bool,
+    /// 项目根目录下 .git 的 HEAD、索引或引用有变化（终端或 AI 执行了 Git 操作）。
+    pub git: bool,
 }
 
 impl Watchers {
@@ -80,7 +82,9 @@ fn forward(
 ) {
     let mut pending = BTreeSet::new();
     let mut rescan = false;
+    let mut git = false;
     let mut deadline: Option<Instant> = None;
+    let git_dir = root.join(".git");
     loop {
         let message = match deadline {
             Some(at) => receiver.recv_timeout(at.saturating_duration_since(Instant::now())),
@@ -92,6 +96,9 @@ fn forward(
                 for path in &event.paths {
                     if let Some(relative) = relative(&root, path) {
                         pending.insert(relative);
+                    } else if let Ok(inner) = path.strip_prefix(&git_dir) {
+                        // 对象库写入后总会更新索引或引用，忽略它可减少无效刷新。
+                        git |= !inner.starts_with("objects") && !inner.starts_with("logs");
                     }
                 }
                 if pending.len() > MAX_PATHS {
@@ -102,13 +109,15 @@ fn forward(
             // 监听出错时无法确定变化范围，要求前端整体刷新。
             Ok(Err(_)) => rescan = true,
             Err(RecvTimeoutError::Timeout) => {
-                if rescan || !pending.is_empty() {
+                if rescan || git || !pending.is_empty() {
                     let changes = Changes {
                         project_id,
                         paths: std::mem::take(&mut pending).into_iter().collect(),
                         rescan,
+                        git,
                     };
                     rescan = false;
+                    git = false;
                     let _ = app.emit_to(
                         EventTarget::webview_window(label.as_str()),
                         "nib://files-changed",

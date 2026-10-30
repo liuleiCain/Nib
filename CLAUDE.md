@@ -6,7 +6,7 @@
 
 Nib（笔尖）是一款轻量的**桌面代码编辑器**，核心是基础编辑和 Git 可视化。用户明确要求桌面应用；使用 Tauri 2 原生窗口与系统 WebView 承载界面，Rust 提供本地能力。优先 macOS，保持 Windows/Linux 架构兼容。
 
-当前已建立项目并完成阶段一的编辑器骨架，下一步按阶段二实现 Git 核心闭环。请在现有实现上继续，不要重新初始化或替换技术栈。阶段一真实中文输入法组合输入仍待人工验收。
+当前已完成阶段一编辑器骨架和阶段二 Git 核心闭环（GoLand 默认的勾选提交模式），下一步进入阶段三。请在现有实现上继续，不要重新初始化或替换技术栈。真实中文输入法组合输入、Git 界面的真实窗口交互仍待人工验收。
 
 - 技术栈：Tauri 2、Rust、React、TypeScript、Vite、CodeMirror 6、Lucide、npm。
 - React 管理界面、编辑器和交互状态，Rust 管理本地文件、未来的 Git/搜索/监听/配置。
@@ -93,14 +93,16 @@ npm run desktop:build -- --bundles app
 | `src/app/App.tsx`                       | 工作区、标签、保存流程、确认弹窗、快捷键、命令面板、布局 |
 | `src/features/editor/Editor.tsx`        | 单一 CodeMirror 视图、标签状态切换、编辑锁定             |
 | `src/features/editor/model.ts`          | 标签状态、语言加载、主题、未保存判定、换行序列化         |
-| `src/features/explorer/Explorer.tsx`    | 文件树层级加载、展开与刷新                               |
+| `src/features/explorer/`                | 文件树层级加载、展开与刷新，右键菜单与名称输入框         |
 | `src/features/projects/ProjectMenu.tsx` | 最近项目列表与工具栏项目菜单                             |
+| `src/features/git/`                     | 提交面板、Diff 视图、行号旁变更标记                      |
 | `src/lib/backend.ts`                    | Tauri IPC 类型与命令调用                                 |
 | `src/styles/global.css`                 | 主题变量和界面样式                                       |
 | `src-tauri/src/lib.rs`                  | Tauri 注册、启动恢复窗口、窗口销毁、退出确认事件         |
 | `src-tauri/src/window/mod.rs`           | 项目窗口创建、聚焦与销毁清理                             |
 | `src-tauri/src/session/mod.rs`          | 最近项目、打开的项目、各项目标签的持久化                 |
 | `src-tauri/src/watcher/mod.rs`          | 项目目录监听、事件合并，并推送给对应窗口                 |
+| `src-tauri/src/git/mod.rs`              | Git CLI 调用、状态解析、HEAD 版本读取、勾选提交          |
 | `src-tauri/src/commands/mod.rs`         | 命令边界、阻塞任务调度                                   |
 | `src-tauri/src/workspace/mod.rs`        | 按窗口的工作区注册表、项目根目录、工作区 id、路径校验    |
 | `src-tauri/src/filesystem/mod.rs`       | 目录枚举、文本读取、版本检查与安全保存                   |
@@ -108,7 +110,7 @@ npm run desktop:build -- --bundles app
 | `src-tauri/tauri.conf.json`             | 窗口、构建、打包及 CSP                                   |
 | `src-tauri/capabilities/default.json`   | 目录选择与窗口能力权限                                   |
 
-当前自定义命令：`window_startup`、`open_project`、`open_project_window`、`new_window`、`close_project`、`recent_projects`、`forget_project`、`save_tabs`、`cancel_quit`、`list_directory`、`read_file`、`save_file`。当前尚无 Git 后台或 Git 界面。
+当前自定义命令：`window_startup`、`open_project`、`open_project_window`、`new_window`、`close_project`、`recent_projects`、`forget_project`、`save_tabs`、`cancel_quit`、`list_directory`、`read_file`、`save_file`、`git_status`、`git_diff`、`git_head_file`、`git_commit`、`git_restore`、`git_add`、`git_rollback`、`git_ignore`、`create_entry`、`rename_entry`、`trash_entry`、`reveal_entry`。
 
 ## 6. 已执行的验证及边界
 
@@ -122,8 +124,8 @@ npm run desktop:build -- --bundles app
 
 ## 7. 当前限制与需保留的保护
 
-- 尚无文件新建、重命名、删除、废纸篓操作。
-- 项目目录实时监听（`src-tauri/src/watcher`），文件树与已打开标签自动刷新；自动保存默认开启，开关只在本次运行生效。冲突时暂停该文件自动保存，尚无对比合并界面。
+- 文件树右键：新建、重命名（已跟踪用 `git mv`）、移到废纸篓、复制路径、访达显示，以及回滚、加入版本控制、添加到 `.gitignore`。
+- 项目目录实时监听（`src-tauri/src/watcher`），文件树与已打开标签自动刷新；自动保存默认开启，开关只在本次运行生效。冲突时暂停该文件自动保存，尚无对比合并界面；文件被删除时干净标签自动关闭，有未保存编辑的标签保留并提示。
 - 设置、窗口/侧边栏尺寸未持久化；已打开文件只恢复标签，不含未保存内容。
 - 尚无未保存内容的崩溃恢复；正常关闭确认不能覆盖强制结束、崩溃和开发热重载。
 - 文件可编辑上限 20 MiB，超过时只读预览开头 5 MiB（不可编辑、不保存）；二进制按开头 8 KiB 是否含 NUL 判断；超过 1,048,576 个 JavaScript 字符时禁用语法解析（这是当前实现阈值，不是精确字节阈值）。
@@ -133,27 +135,22 @@ npm run desktop:build -- --bundles app
 - 原子保存仅保留普通权限，未保证 ACL、扩展属性、硬链接关系、所有者及断电持久化；最终检查与替换仍存在外部并发竞态。详见架构文档。
 - 无终端、LSP、语义补全、重构、调试器；没有用无作用按钮宣称这些功能已完成。
 
-## 8. 下一步：阶段二 Git 核心闭环
+## 8. 阶段二 Git 核心闭环（已实现）
 
-建议先阅读当前保存流程和工作区切换实现，再按以下顺序增量实现，每一步保持桌面应用可运行。
+按用户选择采用 GoLand 默认的勾选提交模式，不单独操作暂存区：变更列表合并展示相对 HEAD 的修改，勾选文件后用 `git commit --only` 只提交这些文件，其他文件的暂存状态不变。详细设计见 `docs/architecture.md` 的 Git 一节，已知限制见 `docs/roadmap.md`，验证范围见 `docs/verification.md`。
 
-1. **仓库识别和状态**：检测本机 Git；识别项目所属仓库，支持打开仓库子目录；展示分支与非仓库状态。采用适合机器解析的 NUL 分隔输出，正确映射新增、修改、删除、重命名、冲突和特殊文件名。
-2. **侧边栏 Git 入口**：与文件树共用左侧区域，分别展示已暂存、未暂存、未跟踪列表；同一个文件可以同时出现在暂存和未暂存列表。
-3. **统一 Diff**：点击变更在主区打开，明确区分工作区与暂存区。处理未跟踪、删除、重命名和二进制；支持取消、输出上限、截断说明及按需加载。
-4. **暂存操作**：单文件/全部暂存、单文件/全部取消暂存；完成后刷新相关状态，保留错误信息和编辑内容。
-5. **提交操作**：只提交暂存区，提交前明确展示范围；清楚提示编辑器未保存内容未进入 Git。失败时保留提交信息；成功后刷新状态。
-6. **真实验收**：在临时仓库完成“修改 → Diff → 暂存 → 提交”，逐步与 Git CLI 核对。覆盖同一文件同时有暂存/未暂存变化、非仓库、中文/空格/换行文件名、冲突状态和提交失败。
+- 后台 `src-tauri/src/git`：参数数组调用本机 Git、`--literal-pathspecs`、禁止交互、读写超时、输出上限、按仓库串行提交；提交前用登录 shell 的 PATH，保证钩子能找到命令。
+- 前端 `src/features/git`：提交面板、左右对比 / 统一 Diff、行号旁变更标记；文件树着色、状态栏分支在 `App.tsx` 和 `Explorer.tsx`。
+- 提交前先保存勾选文件的未保存编辑；未勾选文件的未保存编辑会明确提示不会参与提交。
 
-Git 实现约束：
+Git 实现约束（后续 Git 功能继续遵守）：
 
-- 使用 Rust 进程 API 和独立参数数组，禁止拼接用户输入到 Shell；适用时用 `--` 分隔路径参数。
-- 同一仓库的写操作串行，完成后刷新；读取有取消和超时，写超时需要确认结果，不能自动重试。
+- 使用 Rust 进程 API 和独立参数数组，禁止拼接用户输入到 Shell；路径用 `--` 或 `--pathspec-from-file` 传入。
+- 同一仓库的写操作串行，完成后刷新；读取有超时，写超时需要确认结果，不能自动重试。
 - 限制状态、日志和 Diff 输出；避免旧项目或旧查询的迟到结果覆盖新状态。
 - 仓库读取、搜索等任务不得阻塞界面；避免全项目预扫描和高频轮询。
 - 不向前端开放任意 Shell 能力，优先通过受控 Rust 命令实现。
 - 遇到 Merge/Rebase 等未实现场景，保留状态并明确说明限制。
-
-阶段二完成后更新 README、路线图和验证记录，提供可运行桌面结果，再进入下一阶段。
 
 ## 9. 后续待做范围
 
@@ -166,7 +163,6 @@ Git 实现约束：
 - 扩展命令面板，提供已实现操作。
 - 字体、字号、缩进、自动换行设置；带版本号的本地配置，经 Rust 统一读写。
 - 窗口/侧边栏尺寸恢复；未保存内容的本地恢复，配置与恢复数据和项目文件分开存储。
-- 文件/目录新建、重命名、删除优先移入系统废纸篓。
 
 ### 阶段四：稳定性和性能
 
@@ -177,7 +173,7 @@ Git 实现约束：
 - 以冷启动可交互 2 秒内、已加载标签切换 100 毫秒内作为初始优化目标，不能当作已达成指标。
 - macOS 打包和实际分发准备，Windows/Linux 对应系统构建验证并如实记录范围。
 
-第一版暂不实现：按行/区块暂存、图形化冲突解决、Merge/Rebase/Cherry-pick、Stash、强推、丢弃变更/Reset/Clean、子模块/多工作区专门管理、内置终端、LSP 和调试器。
+第一版暂不实现：按行/区块暂存、图形化冲突解决、Merge/Rebase/Cherry-pick、Stash、强推、Reset/Clean（文件树回滚已按用户确认实现）、子模块/多工作区专门管理、内置终端、LSP 和调试器。
 
 ## 10. 接续开发规范
 

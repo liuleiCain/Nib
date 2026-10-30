@@ -6,6 +6,7 @@ use tauri::{AppHandle, State, WebviewWindow};
 use crate::{
     error::{AppError, AppResult},
     filesystem::{self, Directory, Document},
+    git::{self, CommitResult, DiffSources, GitLocks, GitStatus, Side},
     session::{ProjectTabs, SessionStore},
     watcher::Watchers,
     window,
@@ -242,6 +243,167 @@ pub async fn read_file(
 ) -> AppResult<Document> {
     let state = workspaces.get(window.label())?;
     blocking(move || filesystem::read(&state, project_id, &path)).await
+}
+
+#[tauri::command]
+/// 在目录下新建空文件或目录，返回新条目的路径。
+pub async fn create_entry(
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
+    project_id: u64,
+    parent: String,
+    name: String,
+    directory: bool,
+) -> AppResult<String> {
+    let state = workspaces.get(window.label())?;
+    blocking(move || filesystem::create(&state, project_id, &parent, &name, directory)).await
+}
+
+#[tauri::command]
+/// 重命名文件或目录，返回新路径；已跟踪的条目使用 git mv。
+pub async fn rename_entry(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    path: String,
+    name: String,
+) -> AppResult<String> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::rename(&state, &locks, project_id, &path, &name)).await
+}
+
+#[tauri::command]
+/// 将文件或目录移到系统废纸篓。
+pub async fn trash_entry(
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
+    project_id: u64,
+    path: String,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    blocking(move || filesystem::trash(&state, project_id, &path)).await
+}
+
+#[tauri::command]
+/// 在系统文件管理器中显示条目；路径为空时显示项目根目录。
+pub async fn reveal_entry(
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
+    project_id: u64,
+    path: String,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    blocking(move || filesystem::reveal(&state, project_id, &path)).await
+}
+
+#[tauri::command]
+/// 回滚文件的 Git 变更：修改与删除恢复为 HEAD，新增取消加入版本控制。
+pub async fn git_rollback(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    paths: Vec<String>,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::revert(&state, &locks, project_id, &paths)).await
+}
+
+#[tauri::command]
+/// 把未跟踪的文件或目录写入项目根目录的 .gitignore。
+pub async fn git_ignore(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    paths: Vec<String>,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::ignore(&state, &locks, project_id, &paths)).await
+}
+
+#[tauri::command]
+/// 读取项目所属仓库的分支和变更。
+pub async fn git_status(
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
+    project_id: u64,
+) -> AppResult<GitStatus> {
+    let state = workspaces.get(window.label())?;
+    blocking(move || git::status(&state, project_id)).await
+}
+
+#[tauri::command]
+/// 返回文件 HEAD 版本与工作区版本，供 Diff 视图比较。
+pub async fn git_diff(
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
+    project_id: u64,
+    path: String,
+    original: Option<String>,
+) -> AppResult<DiffSources> {
+    let state = workspaces.get(window.label())?;
+    blocking(move || git::diff(&state, project_id, &path, original.as_deref())).await
+}
+
+#[tauri::command]
+/// 返回文件的 HEAD 版本，供编辑器行号旁的变更标记比较。
+pub async fn git_head_file(
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
+    project_id: u64,
+    path: String,
+) -> AppResult<Side> {
+    let state = workspaces.get(window.label())?;
+    blocking(move || git::head_file(&state, project_id, &path)).await
+}
+
+#[tauri::command]
+/// 只提交勾选的文件；未跟踪文件随提交一并加入版本库。
+pub async fn git_commit(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    message: String,
+    paths: Vec<String>,
+    untracked: Vec<String>,
+) -> AppResult<CommitResult> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::commit(&state, &locks, project_id, &message, &paths, &untracked)).await
+}
+
+#[tauri::command]
+/// 将未跟踪文件加入版本控制，不提交。
+pub async fn git_add(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    paths: Vec<String>,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::add(&state, &locks, project_id, &paths)).await
+}
+
+#[tauri::command]
+/// 从 HEAD 恢复工作区中已删除的文件。
+pub async fn git_restore(
+    workspaces: State<'_, Workspaces>,
+    locks: State<'_, GitLocks>,
+    window: WebviewWindow,
+    project_id: u64,
+    path: String,
+) -> AppResult<()> {
+    let state = workspaces.get(window.label())?;
+    let locks = locks.inner().clone();
+    blocking(move || git::restore(&state, &locks, project_id, &path)).await
 }
 
 #[tauri::command]
