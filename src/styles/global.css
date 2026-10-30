@@ -863,35 +863,6 @@ h1 span {
   color: #b5c3bc;
   margin-bottom: 14px;
 }
-.settings label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  color: #919fa5;
-  font-size: 11px;
-  margin-bottom: 15px;
-}
-.settings label > div {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.settings label button {
-  width: 24px;
-  height: 24px;
-  border: 1px solid #48544f;
-  border-radius: 3px;
-}
-.settings p {
-  margin: 18px 0 0;
-  padding-top: 12px;
-  border-top: 1px solid #ffffff08;
-  font-size: 9px;
-  color: #6d7b81;
-}
-.settings input {
-  accent-color: var(--accent);
-}
 .modal-backdrop {
   position: absolute;
   inset: 0;
@@ -2314,20 +2285,211 @@ button.commit-branch svg:last-child {
   font-size: 9px;
 }
 
-/* 设置 */
-.settings-font input,
-.settings select {
-  width: 140px;
-  height: 24px;
-  padding: 0 6px;
+/* 设置框：分组的设置项，左侧名称与说明，右侧控件 */
+.settings-dialog {
+  width: min(520px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  padding: 20px 24px;
+}
+.settings-dialog .popover-title h2 {
+  margin: 0;
+  font-size: 15px;
+}
+.settings-dialog section + section {
+  margin-top: 18px;
+}
+.settings-dialog h3 {
+  margin: 0 0 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #ffffff0d;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 0;
+  color: #b5c3bc;
+  font-size: 12px;
+}
+.settings-row > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.settings-row small {
+  color: #6d7b81;
+  font-size: 10px;
+}
+.settings-row input[type='checkbox'] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+}
+.settings-input {
+  flex: none;
+  width: 170px;
+  height: 26px;
+  padding: 0 7px;
   border: 1px solid #48544f;
   border-radius: 3px;
   background: #1b2024;
   color: var(--text);
   font-size: 11px;
-}
-.settings-font input:focus,
-.settings select:focus {
-  border-color: #6a8175;
   outline: none;
+}
+.settings-input:focus {
+  border-color: #6a8175;
+}
+.settings-combo {
+  position: relative;
+  flex: none;
+}
+.settings-combo .settings-input {
+  width: 220px;
+  padding-right: 26px;
+}
+.settings-combo-toggle {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #919fa5;
+}
+.unsaved-dialog .settings-combo-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 2;
+  width: 320px;
+  max-height: 300px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: #232a2e;
+  border: 1px solid #3a464b;
+  border-radius: 5px;
+  box-shadow: 0 12px 32px #0006;
+}
+/* 设置框与未保存确认框共用 .unsaved-dialog，覆盖其列表样式 */
+.unsaved-dialog .settings-combo-list li {
+  display: block;
+  padding: 0;
+  color: inherit;
+}
+.settings-combo-group {
+  padding: 8px 8px 4px 28px;
+  color: #6d7b81;
+  font-size: 10px;
+}
+.settings-combo-list li + li .settings-combo-group {
+  margin-top: 4px;
+  border-top: 1px solid #ffffff0a;
+  padding-top: 10px;
+}
+.unsaved-dialog .settings-combo-list li.settings-combo-note {
+  padding: 8px;
+  color: #6d7b81;
+  font-size: 11px;
+}
+.settings-combo-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px 0 6px;
+  border-radius: 3px;
+  color: #b5c3bc;
+  font-size: 12px;
+  cursor: default;
+}
+.settings-combo-option.active {
+  background: #93b9aa1f;
+  color: #d4dfda;
+}
+.settings-combo-check {
+  display: flex;
+  flex: none;
+  width: 14px;
+  color: var(--accent);
+}
+.settings-combo-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-combo-name small {
+  margin-left: 6px;
+  color: #6d7b81;
+  font-size: 10px;
+}
+.settings-combo-preview {
+  flex: none;
+  color: #7f8d92;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.settings-combo-option.active .settings-combo-preview {
+  color: #aabbb1;
+}
+.settings-stepper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+}
+.settings-stepper span {
+  min-width: 36px;
+  text-align: center;
+}
+.settings-stepper button {
+  width: 24px;
+  height: 24px;
+  border: 1px solid #48544f;
+  border-radius: 3px;
+}
+.settings-stepper button:disabled {
+  opacity: 0.4;
+}
+.settings-segment {
+  display: flex;
+  flex: none;
+  border: 1px solid #48544f;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.settings-segment button {
+  padding: 5px 10px;
+  font-size: 11px;
+  color: #919fa5;
+}
+.settings-segment button + button {
+  border-left: 1px solid #48544f;
+}
+.settings-segment button.active {
+  background: #93b9aa22;
+  color: #d4dfda;
+}
+.settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #ffffff0d;
+  color: #6d7b81;
+  font-size: 10px;
 }

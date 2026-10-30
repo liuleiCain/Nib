@@ -117,6 +117,7 @@ pub fn run() {
             commands::cancel_search,
             commands::get_settings,
             commands::save_settings,
+            commands::system_fonts,
             commands::get_layout,
             commands::save_sidebar_width,
             commands::save_view,

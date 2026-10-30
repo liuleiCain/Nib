@@ -97,6 +97,7 @@ npm run desktop:build -- --bundles app
 | `src/features/projects/ProjectMenu.tsx` | 最近项目列表与工具栏项目菜单                             |
 | `src/features/git/`                     | 提交面板、提交记录、分支弹窗、推送确认、Diff、变更标记   |
 | `src/features/search/`                  | 快速打开、项目搜索面板                                   |
+| `src/features/settings/`                | 设置框（编辑器与 Git 显示设置）                          |
 | `src/lib/backend.ts`                    | Tauri IPC 类型与命令调用                                 |
 | `src/styles/global.css`                 | 主题变量和界面样式                                       |
 | `src-tauri/src/lib.rs`                  | Tauri 注册、启动恢复窗口、窗口销毁、退出确认事件         |
@@ -108,7 +109,7 @@ npm run desktop:build -- --bundles app
 | `src-tauri/src/git/remote.rs`           | 分支与分支操作、远程仓库管理，Fetch、Push、仅快进 Pull   |
 | `src-tauri/src/git/merge.rs`            | 合并、变基，冲突标记已解决、完成/继续、跳过与中止        |
 | `src-tauri/src/search/mod.rs`           | 快速打开文件列表、可取消的项目文本搜索                   |
-| `src-tauri/src/settings/mod.rs`         | 编辑器设置的读写与校验                                   |
+| `src-tauri/src/settings/mod.rs`         | 用户设置的读写与校验；`fonts.rs` 读取系统字体列表        |
 | `src-tauri/src/recovery/mod.rs`         | 未保存内容的恢复数据                                     |
 | `src-tauri/src/common/mod.rs`           | 跨模块公共能力（数据文件原子写入）                       |
 | `src-tauri/src/commands/mod.rs`         | 命令边界、阻塞任务调度                                   |
@@ -118,7 +119,7 @@ npm run desktop:build -- --bundles app
 | `src-tauri/tauri.conf.json`             | 窗口、构建、打包及 CSP                                   |
 | `src-tauri/capabilities/default.json`   | 目录选择与窗口能力权限                                   |
 
-当前自定义命令：`window_startup`、`open_project`、`open_project_window`、`new_window`、`close_project`、`recent_projects`、`forget_project`、`save_tabs`、`save_expanded`、`cancel_quit`、`list_directory`、`read_file`、`save_file`、`git_status`、`git_diff`、`git_head_file`、`git_commit`、`git_restore`、`git_add`、`git_rollback`、`git_ignore`、`git_log`、`git_commit_detail`、`git_commit_diff`、`git_branches`、`git_create_branch`、`git_switch_branch`、`git_checkout_remote`、`git_rename_branch`、`git_delete_branch`、`git_delete_remote_branch`、`git_add_remote`、`git_set_remote_url`、`git_rename_remote`、`git_remove_remote`、`git_fetch`、`git_pull`、`git_push`、`git_outgoing`、`git_merge`、`git_rebase`、`git_resolve`、`git_continue`、`git_skip`、`git_abort`、`create_entry`、`rename_entry`、`trash_entry`、`reveal_entry`、`search_files`、`search_text`、`cancel_search`、`get_settings`、`save_settings`、`get_layout`、`save_sidebar_width`、`save_view`、`recovery_save`、`recovery_discard`、`recovery_list`。
+当前自定义命令：`window_startup`、`open_project`、`open_project_window`、`new_window`、`close_project`、`recent_projects`、`forget_project`、`save_tabs`、`save_expanded`、`cancel_quit`、`list_directory`、`read_file`、`save_file`、`git_status`、`git_diff`、`git_head_file`、`git_commit`、`git_restore`、`git_add`、`git_rollback`、`git_ignore`、`git_log`、`git_commit_detail`、`git_commit_diff`、`git_branches`、`git_create_branch`、`git_switch_branch`、`git_checkout_remote`、`git_rename_branch`、`git_delete_branch`、`git_delete_remote_branch`、`git_add_remote`、`git_set_remote_url`、`git_rename_remote`、`git_remove_remote`、`git_fetch`、`git_pull`、`git_push`、`git_outgoing`、`git_merge`、`git_rebase`、`git_resolve`、`git_continue`、`git_skip`、`git_abort`、`create_entry`、`rename_entry`、`trash_entry`、`reveal_entry`、`search_files`、`search_text`、`cancel_search`、`get_settings`、`save_settings`、`system_fonts`、`get_layout`、`save_sidebar_width`、`save_view`、`recovery_save`、`recovery_discard`、`recovery_list`。
 
 ## 6. 已执行的验证及边界
 
@@ -134,7 +135,7 @@ npm run desktop:build -- --bundles app
 
 - 文件树右键：新建、重命名（已跟踪用 `git mv`）、移到废纸篓、复制路径、访达显示，以及回滚、加入版本控制、添加到 `.gitignore`。
 - 项目目录实时监听（`src-tauri/src/watcher`），文件树与已打开标签自动刷新；自动保存默认开启，开关只在本次运行生效。冲突时暂停该文件自动保存，尚无对比合并界面；文件被删除时干净标签自动关闭，有未保存编辑的标签保留并提示。
-- 设置保存在 `~/.nib/settings.json`，窗口尺寸、侧边栏宽度与界面偏好（侧边栏显示与面板、变更列表分组、Diff 视图）保存在 `session.json` 的 `layout`，各项目文件树展开目录与标签一起保存；未保存内容每 1.5 秒内写入 `~/.nib/recovery/`，异常退出后打开项目时提示恢复（见 `docs/architecture.md`）。
+- 用户设置（编辑器字体、字号、缩进、自动换行、自动保存，以及变更列表分组、Diff 视图）保存在 `~/.nib/settings.json`，入口为工具栏右上角齿轮或 Cmd/Ctrl+,；窗口尺寸、侧边栏宽度、侧边栏显示与当前面板保存在 `session.json` 的 `layout`，各项目文件树展开目录与标签一起保存；未保存内容每 1.5 秒内写入 `~/.nib/recovery/`，异常退出后打开项目时提示恢复（见 `docs/architecture.md`）。
 - 文件可编辑上限 20 MiB，超过时只读预览开头 5 MiB（不可编辑、不保存）；二进制按开头 8 KiB 是否含 NUL 判断；超过 1,048,576 个 JavaScript 字符时禁用语法解析（这是当前实现阈值，不是精确字节阈值）。
 - 最多 30 个打开/正在打开的标签，单目录最多展示 10,000 项，尚未做列表虚拟化。
 - 文件树隐藏 `.git`、`node_modules`、`target`、`.DS_Store`；这些规则独立于未来搜索的 `.gitignore` 规则。
@@ -164,7 +165,7 @@ Git 实现约束（后续 Git 功能继续遵守）：
 ### 阶段三：日常使用能力
 
 - 已实现 Git 部分：提交记录分页与只读提交 Diff、本地与远程分支列表及 GoLand 式分支操作菜单（切换、从任意分支新建、检出远程分支、重命名、删除本地/远程分支）、远程地址与上游信息、远程仓库管理（添加、修改地址、重命名、删除）、Fetch / Push（推送前确认框列出待推送的提交与文件）/ 仅快进 Pull、合并与变基（冲突在编辑器中解决后标记已解决，可完成/继续、跳过、中止）（设计见 `docs/architecture.md` Git 一节，限制见 `docs/roadmap.md`，真实窗口交互待验收）。
-- 已实现：Cmd/Ctrl+P 快速打开（模糊匹配、`路径:行号`）；Cmd/Ctrl+Shift+F 项目搜索（按文件分组、可取消、限制结果数、排除 `.git`、默认尊重 `.gitignore`）；命令面板补充已实现操作；字体、字号、缩进、自动换行、自动保存设置（`~/.nib/settings.json`，带版本号，经 Rust 读写）；窗口与侧边栏尺寸恢复；未保存内容的本地恢复（`~/.nib/recovery/`，与配置、项目文件分开存储）。设计见 `docs/architecture.md`，限制见 `docs/roadmap.md`，真实窗口交互待验收。
+- 已实现：Cmd/Ctrl+P 快速打开（模糊匹配、`路径:行号`）；Cmd/Ctrl+Shift+F 项目搜索（按文件分组、可取消、限制结果数、排除 `.git`、默认尊重 `.gitignore`）；命令面板补充已实现操作；字体、字号、缩进、自动换行、自动保存及 Git 显示设置（`~/.nib/settings.json`，带版本号，经 Rust 读写）；窗口与侧边栏尺寸恢复；未保存内容的本地恢复（`~/.nib/recovery/`，与配置、项目文件分开存储）。设计见 `docs/architecture.md`，限制见 `docs/roadmap.md`，真实窗口交互待验收。
 
 ### 阶段四：稳定性和性能
 

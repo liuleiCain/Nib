@@ -24,6 +24,8 @@ notify = "8.2.1"
 trash = "=5.2.9"
 ignore = "0.4.30"
 regex = "1.13.1"
+# 读取系统字体列表，供设置中的字体选择；WebView 不提供系统字体列表。
+fontdb = "=0.24.0"
 
 # macOS 原生窗口标签；与 Tauri 依赖的版本一致，不引入新包。
 [target.'cfg(target_os = "macos")'.dependencies]

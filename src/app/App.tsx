@@ -35,7 +35,7 @@ import {
   RotateCw,
   Save,
   Search,
-  Settings2,
+  SettingsIcon,
   Trash2,
   Undo2,
   WrapText,
@@ -90,6 +90,13 @@ import { QuickOpen } from '../features/search/QuickOpen';
 import { SearchPanel } from '../features/search/SearchPanel';
 import { DiffView } from '../features/git/DiffView';
 import { PushDialog } from '../features/git/PushDialog';
+import type { SettingValues } from '../features/settings/SettingsDialog';
+import {
+  DEFAULT_SETTINGS,
+  FONT_SIZE,
+  SettingsDialog,
+  cssFontFamily,
+} from '../features/settings/SettingsDialog';
 import { setHeadDoc } from '../features/git/changes';
 import { Text } from '@codemirror/state';
 
@@ -282,7 +289,6 @@ export function App() {
   const settingsLoaded = useRef(false);
   const savedSettings = useRef<Settings | null>(null);
   const settingsTimer = useRef<number | null>(null);
-  const [fontDraft, setFontDraft] = useState('');
   const sidebarLoaded = useRef(false);
   const savedSidebarWidth = useRef(248);
   const [quickOpen, setQuickOpen] = useState(false);
@@ -3029,7 +3035,7 @@ export function App() {
     },
     {
       label: '设置',
-      detail: '字体 / 字号 / 缩进 / 换行',
+      detail: `${mod} ,  字体 / 字号 / 缩进 / 换行 / 自动保存 / Git 显示`,
       action: () => setSettings(true),
     },
   ];
@@ -3077,6 +3083,17 @@ export function App() {
     if (tab && isDirty(tab) && !tab.paused) void saveTab(tab, true);
   }, [active]);
 
+  /** 设置框中修改的设置项立即生效，稍后统一写盘。 */
+  function changeSettings(patch: Partial<SettingValues>) {
+    if (patch.fontFamily !== undefined) setFontFamily(patch.fontFamily);
+    if (patch.fontSize !== undefined) setFontSize(patch.fontSize);
+    if (patch.tabSize !== undefined) setTabSize(patch.tabSize);
+    if (patch.wrap !== undefined) setWrap(patch.wrap);
+    if (patch.autoSave !== undefined) setAutoSave(patch.autoSave);
+    if (patch.changeTree !== undefined) setChangeTree(patch.changeTree);
+    if (patch.unifiedDiff !== undefined) setUnified(patch.unifiedDiff);
+  }
+
   /** 应用后台保存或其他窗口修改后的设置。 */
   function applySettings(next: Settings) {
     savedSettings.current = next;
@@ -3085,6 +3102,8 @@ export function App() {
     setTabSize(next.tabSize);
     setWrap(next.wrap);
     setAutoSave(next.autoSave);
+    setChangeTree(next.changeTree);
+    setUnified(next.unifiedDiff);
   }
 
   // 启动时读取设置和侧边栏宽度；读取完成前不写盘，避免用默认值覆盖已保存的设置。
@@ -3108,13 +3127,9 @@ export function App() {
         const view: View = {
           sidebar: layout.sidebar ?? true,
           panel: layout.panel ?? 'files',
-          changeTree: layout.changeTree ?? false,
-          unifiedDiff: layout.unifiedDiff ?? false,
         };
         setSidebar(view.sidebar);
         setPanel(view.panel);
-        setChangeTree(view.changeTree);
-        setUnified(view.unifiedDiff);
         savedView.current = JSON.stringify(view);
         viewLoaded.current = true;
       })
@@ -3124,15 +3139,10 @@ export function App() {
       });
   }, []);
 
-  // 侧边栏与 Diff 偏好停止变化后写盘。
+  // 侧边栏显示与当前面板停止变化后写盘。
   useEffect(() => {
     if (!desktop || !viewLoaded.current) return;
-    const view: View = {
-      sidebar,
-      panel,
-      changeTree,
-      unifiedDiff: unified,
-    };
+    const view: View = { sidebar, panel };
     const key = JSON.stringify(view);
     if (key === savedView.current) return;
     const timer = window.setTimeout(() => {
@@ -3141,10 +3151,10 @@ export function App() {
         .then(() => {
           savedView.current = key;
         })
-        .catch((error) => notify(`界面偏好保存失败：${errorMessage(error)}`));
+        .catch((error) => notify(`侧边栏状态保存失败：${errorMessage(error)}`));
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [sidebar, panel, changeTree, unified]);
+  }, [sidebar, panel]);
 
   // 设置变化后稍后写盘；保存失败时退回上次保存的设置。
   useEffect(() => {
@@ -3157,6 +3167,8 @@ export function App() {
       tabSize,
       wrap,
       autoSave,
+      changeTree,
+      unifiedDiff: unified,
     };
     if (
       saved &&
@@ -3164,7 +3176,9 @@ export function App() {
       saved.fontSize === next.fontSize &&
       saved.tabSize === next.tabSize &&
       saved.wrap === next.wrap &&
-      saved.autoSave === next.autoSave
+      saved.autoSave === next.autoSave &&
+      saved.changeTree === next.changeTree &&
+      saved.unifiedDiff === next.unifiedDiff
     )
       return;
     if (settingsTimer.current !== null)
@@ -3179,7 +3193,7 @@ export function App() {
           if (savedSettings.current) applySettings(savedSettings.current);
         });
     }, SETTINGS_DELAY);
-  }, [fontFamily, fontSize, tabSize, wrap, autoSave]);
+  }, [fontFamily, fontSize, tabSize, wrap, autoSave, changeTree, unified]);
 
   // 侧边栏宽度停止变化后写盘。
   useEffect(() => {
@@ -3200,11 +3214,6 @@ export function App() {
   useEffect(() => {
     scheduleRecovery();
   }, [tabs]);
-
-  // 打开设置时用当前字体初始化输入框。
-  useEffect(() => {
-    if (settings) setFontDraft(fontFamily);
-  }, [settings]);
 
   // 关闭自动保存时取消等待中的保存；窗口卸载时清理计时器。
   useEffect(() => {
@@ -3243,7 +3252,7 @@ export function App() {
         namingRef.current ||
         pushingRef.current !== null
       ) {
-        if (['s', 'w', 'o', 'p', 'b', 'n', 'k', 'f'].includes(key))
+        if (['s', 'w', 'o', 'p', 'b', 'n', 'k', 'f', ','].includes(key))
           event.preventDefault();
         return;
       }
@@ -3290,14 +3299,20 @@ export function App() {
       } else if (key === 'f' && event.shiftKey) {
         event.preventDefault();
         operations.current.search();
+      } else if (key === ',') {
+        event.preventDefault();
+        setSettings((value) => !value);
       } else if (['=', '+', '-'].includes(key)) {
         event.preventDefault();
         setFontSize((size) =>
-          Math.max(10, Math.min(24, size + (key === '-' ? -1 : 1))),
+          Math.max(
+            FONT_SIZE.min,
+            Math.min(FONT_SIZE.max, size + (key === '-' ? -1 : 1)),
+          ),
         );
       } else if (key === '0') {
         event.preventDefault();
-        setFontSize(13);
+        setFontSize(DEFAULT_SETTINGS.fontSize);
       }
     };
     window.addEventListener('keydown', listener, true);
@@ -3426,7 +3441,9 @@ export function App() {
           '--sidebar-width': `${sidebarWidth}px`,
           '--editor-size': `${fontSize}px`,
           ...(fontFamily
-            ? { '--editor-font': `${fontFamily}, ${DEFAULT_EDITOR_FONT}` }
+            ? {
+                '--editor-font': `${cssFontFamily(fontFamily)}, ${DEFAULT_EDITOR_FONT}`,
+              }
             : {}),
         } as CSSProperties
       }
@@ -3470,10 +3487,12 @@ export function App() {
         <button
           className={`icon-button ${settings ? 'active' : ''}`}
           onClick={() => setSettings((value) => !value)}
-          title="显示设置"
-          aria-label="显示设置"
+          title={`设置 (${mod}+,)`}
+          aria-label="设置"
+          aria-haspopup="dialog"
+          aria-expanded={settings}
         >
-          <Settings2 size={16} />
+          <SettingsIcon size={16} />
         </button>
       </header>
 
@@ -4115,90 +4134,20 @@ export function App() {
       )}
 
       {settings && (
-        <div
-          className="popover settings"
-          role="dialog"
-          aria-label="设置"
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') setSettings(false);
+        <SettingsDialog
+          values={{
+            fontFamily,
+            fontSize,
+            tabSize,
+            wrap,
+            autoSave,
+            changeTree,
+            unifiedDiff: unified,
           }}
-        >
-          <div className="popover-title">
-            设置
-            <button
-              className="icon-button"
-              aria-label="关闭设置"
-              onClick={() => setSettings(false)}
-            >
-              <X size={14} />
-            </button>
-          </div>
-          <label className="settings-font">
-            字体
-            <input
-              value={fontDraft}
-              placeholder="默认等宽字体"
-              spellCheck={false}
-              title="CSS 字体名，多个用逗号分隔，如 'JetBrains Mono', Menlo"
-              onChange={(event) => setFontDraft(event.target.value)}
-              onBlur={() => setFontFamily(fontDraft.trim())}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.nativeEvent.isComposing)
-                  setFontFamily(fontDraft.trim());
-              }}
-            />
-          </label>
-          <label>
-            字号{' '}
-            <div>
-              <button
-                onClick={() => setFontSize((size) => Math.max(10, size - 1))}
-                aria-label="减小字号"
-              >
-                −
-              </button>
-              <span>{fontSize} px</span>
-              <button
-                onClick={() => setFontSize((size) => Math.min(24, size + 1))}
-                aria-label="增大字号"
-              >
-                +
-              </button>
-            </div>
-          </label>
-          <label>
-            缩进宽度
-            <select
-              value={tabSize}
-              onChange={(event) => setTabSize(Number(event.target.value))}
-            >
-              {[2, 4, 8].map((size) => (
-                <option key={size} value={size}>
-                  {size} 个空格
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            自动换行{' '}
-            <input
-              type="checkbox"
-              checked={wrap}
-              onChange={(event) => setWrap(event.target.checked)}
-            />
-          </label>
-          <label>
-            自动保存{' '}
-            <input
-              type="checkbox"
-              checked={autoSave}
-              onChange={(event) => setAutoSave(event.target.checked)}
-            />
-          </label>
-          <p>
-            保存在 ~/.nib/settings.json，所有窗口共用 · {mod} + / − 调整字号
-          </p>
-        </div>
+          mod={mod}
+          onChange={changeSettings}
+          onClose={() => setSettings(false)}
+        />
       )}
 
       {quickOpen && project && (

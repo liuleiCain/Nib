@@ -46,7 +46,8 @@ struct Session {
     layout: Layout,
 }
 
-/// 窗口尺寸、侧边栏与 Diff 的界面偏好，所有项目窗口共用最近一次的值；缺少的项按界面默认值处理。
+/// 窗口尺寸与侧边栏状态，所有项目窗口共用最近一次的值；缺少的项按界面默认值处理。
+/// 用户可调整的偏好保存在设置文件，见 `settings`。
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Layout {
@@ -58,18 +59,6 @@ pub struct Layout {
     pub sidebar: Option<bool>,
     /// 侧边栏当前面板，取值见 `PANELS`。
     pub panel: Option<String>,
-    /// 提交面板是否按目录分组。
-    pub change_tree: Option<bool>,
-    /// Diff 是否使用统一视图。
-    pub unified_diff: Option<bool>,
-}
-
-/// 侧边栏与 Diff 的界面偏好。
-pub struct View {
-    pub sidebar: bool,
-    pub panel: String,
-    pub change_tree: bool,
-    pub unified_diff: bool,
 }
 
 /// 最近项目列表中的一项，按最近打开排序。
@@ -233,7 +222,7 @@ impl SessionStore {
         })
     }
 
-    /// 上次记录的窗口尺寸、侧边栏宽度与界面偏好。
+    /// 上次记录的窗口尺寸与侧边栏状态。
     pub fn layout(&self) -> AppResult<Layout> {
         Ok(self.data()?.layout.clone())
     }
@@ -254,17 +243,14 @@ impl SessionStore {
         self.update(|session| session.layout.sidebar_width = Some(width))
     }
 
-    /// 记录侧边栏与 Diff 的界面偏好；面板未知时拒绝。
-    pub fn save_view(&self, view: View) -> AppResult<()> {
-        if !PANELS.contains(&view.panel.as_str()) {
+    /// 记录侧边栏是否显示及当前面板；面板未知时拒绝。
+    pub fn save_view(&self, sidebar: bool, panel: String) -> AppResult<()> {
+        if !PANELS.contains(&panel.as_str()) {
             return Err(AppError::new("SESSION", "侧边栏面板无效，未保存。"));
         }
         self.update(|session| {
-            let layout = &mut session.layout;
-            layout.sidebar = Some(view.sidebar);
-            layout.panel = Some(view.panel);
-            layout.change_tree = Some(view.change_tree);
-            layout.unified_diff = Some(view.unified_diff);
+            session.layout.sidebar = Some(sidebar);
+            session.layout.panel = Some(panel);
         })
     }
 

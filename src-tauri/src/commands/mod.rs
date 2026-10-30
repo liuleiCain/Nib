@@ -12,8 +12,11 @@ use crate::{
     },
     recovery::{RecoveryEntry, RecoveryStore},
     search::{self, FileList, SearchOptions, SearchResult, Searches},
-    session::{Layout, ProjectTabs, SessionStore, View},
-    settings::{Settings, SettingsStore},
+    session::{Layout, ProjectTabs, SessionStore},
+    settings::{
+        fonts::{self, FontFamily},
+        Settings, SettingsStore,
+    },
     watcher::Watchers,
     window,
     workspace::{self, Project, Workspaces},
@@ -841,7 +844,13 @@ pub async fn save_settings(
 }
 
 #[tauri::command]
-/// 上次记录的窗口尺寸、侧边栏宽度与界面偏好。
+/// 本机已安装的字体家族，首次调用时在后台线程扫描。
+pub async fn system_fonts() -> AppResult<Vec<FontFamily>> {
+    blocking(|| Ok(fonts::system_fonts())).await
+}
+
+#[tauri::command]
+/// 上次记录的窗口尺寸、侧边栏宽度与侧边栏状态。
 pub fn get_layout(sessions: State<'_, Arc<SessionStore>>) -> AppResult<Layout> {
     sessions.layout()
 }
@@ -856,24 +865,14 @@ pub async fn save_sidebar_width(
 }
 
 #[tauri::command]
-/// 记录侧边栏显示、当前面板、变更列表分组与 Diff 视图偏好。
+/// 记录侧边栏是否显示及当前面板。
 pub async fn save_view(
     sessions: State<'_, Arc<SessionStore>>,
     sidebar: bool,
     panel: String,
-    change_tree: bool,
-    unified_diff: bool,
 ) -> AppResult<()> {
     let sessions = sessions.inner().clone();
-    blocking(move || {
-        sessions.save_view(View {
-            sidebar,
-            panel,
-            change_tree,
-            unified_diff,
-        })
-    })
-    .await
+    blocking(move || sessions.save_view(sidebar, panel)).await
 }
 
 #[tauri::command]

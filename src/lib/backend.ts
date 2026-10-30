@@ -278,30 +278,37 @@ export interface Settings {
   tabSize: number;
   wrap: boolean;
   autoSave: boolean;
-}
-
-/** 侧边栏面板。 */
-export type SidebarPanel = 'files' | 'commit' | 'log' | 'search';
-
-/** 侧边栏与 Diff 的界面偏好。 */
-export interface View {
-  sidebar: boolean;
-  panel: SidebarPanel;
   /** 提交面板按目录分组。 */
   changeTree: boolean;
   /** Diff 使用统一视图。 */
   unifiedDiff: boolean;
 }
 
-/** 上次记录的窗口尺寸、侧边栏宽度与界面偏好；未记录的项为 null。 */
+/** 本机已安装的字体家族。 */
+export interface FontFamily {
+  /** 英文家族名，作为 CSS font-family 使用。 */
+  name: string;
+  /** 字体自带的中文名称。 */
+  local: string | null;
+  monospaced: boolean;
+}
+
+/** 侧边栏面板。 */
+export type SidebarPanel = 'files' | 'commit' | 'log' | 'search';
+
+/** 侧边栏是否显示及当前面板。 */
+export interface View {
+  sidebar: boolean;
+  panel: SidebarPanel;
+}
+
+/** 上次记录的窗口尺寸、侧边栏宽度与侧边栏状态；未记录的项为 null。 */
 export interface Layout {
   width: number | null;
   height: number | null;
   sidebarWidth: number | null;
   sidebar: boolean | null;
   panel: SidebarPanel | null;
-  changeTree: boolean | null;
-  unifiedDiff: boolean | null;
 }
 
 /** 上次未正常关闭时留下的未保存内容。 */
@@ -465,6 +472,8 @@ export const backend = {
   /** 保存设置，返回校验后的设置；所有窗口收到 nib://settings-changed。 */
   saveSettings: (settings: Settings) =>
     invoke<Settings>('save_settings', { settings }),
+  /** 本机字体家族；首次调用时扫描系统字体目录，新装的字体重启 Nib 后出现。 */
+  systemFonts: () => invoke<FontFamily[]>('system_fonts'),
   getLayout: () => invoke<Layout>('get_layout'),
   saveSidebarWidth: (width: number) =>
     invoke<void>('save_sidebar_width', { width }),
