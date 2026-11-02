@@ -2902,7 +2902,7 @@ export function App() {
       [
         restored ? `已恢复 ${restored} 个文件的未保存内容` : '',
         changed.length
-          ? `${changed.join('、')} 在上次编辑后被外部修改，已暂停自动保存，请核对后手动保存`
+          ? `${changed.join('、')} 在上次编辑后被外部修改，已暂停自动保存，请点击“对比并处理”核对内容`
           : '',
         failed.length ? `${failed.join('、')} 无法打开，恢复数据已保留` : '',
       ]
@@ -2941,6 +2941,12 @@ export function App() {
       }
     }
     if (tab.truncated) return 'failed';
+    const changed = tab.revision !== entry.revision;
+    if (changed) {
+      // 保留草稿原来基于的磁盘版本，重复恢复或手动保存时仍能识别外部冲突。
+      tab.revision = entry.revision;
+      tab.paused = true;
+    }
     const change = diffChange(tab.state.doc, entry.content);
     if (change) {
       const view = viewRef.current;
@@ -2949,8 +2955,6 @@ export function App() {
         tab.state = view.state;
       } else tab.state = tab.state.update({ changes: change }).state;
     }
-    const changed = tab.revision !== entry.revision;
-    if (changed) tab.paused = true;
     updateTabs(tabsRef.current);
     if (!activeRef.current) activate(tab.path);
     return changed ? 'changed' : 'ok';
