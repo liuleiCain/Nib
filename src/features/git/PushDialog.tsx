@@ -12,6 +12,7 @@ import type {
   Outgoing,
 } from '../../lib/backend';
 import { backend, errorMessage } from '../../lib/backend';
+import { useVirtualRows } from '../../lib/virtual';
 import { changeStyle } from './CommitPanel';
 import type { DiffTab } from './DiffView';
 import { DiffView } from './DiffView';
@@ -30,6 +31,67 @@ const dirName = (path: string) => {
 };
 const fullTime = (seconds: number) =>
   new Date(seconds * 1000).toLocaleString('zh-CN', { hour12: false });
+
+/** 推送确认框右侧的变更文件列表，最多 5,000 项只渲染可见部分；按提交重新挂载，切换提交时回到顶部。 */
+function CommitFiles({
+  detail,
+  onOpen,
+}: {
+  detail: CommitDetail;
+  onOpen: (file: CommitFile) => void;
+}) {
+  const { scrollRef, items, spacer, measure } = useVirtualRows<HTMLDivElement>(
+    detail.files.length,
+    () => 26,
+    (index) => detail.files[index].path,
+  );
+  return (
+    <div ref={scrollRef} className="push-file-scroll">
+      {!detail.files.length && (
+        <p className="push-note">此提交未改动项目目录内的文件。</p>
+      )}
+      <div style={spacer}>
+        {items.map((item) => {
+          const file = detail.files[item.index];
+          const style = changeStyle[file.kind];
+          return (
+            <div
+              key={item.key}
+              ref={measure}
+              data-index={item.index}
+              className="change-row"
+            >
+              <button
+                className={`change-name git-${file.kind}`}
+                title={`${file.original ? `${file.original} → ` : ''}${file.path} · ${style.label}，点击查看 Diff`}
+                onClick={() => onOpen(file)}
+              >
+                <span className="change-file">{baseName(file.path)}</span>
+                {dirName(file.path) && (
+                  <span className="change-dir">{dirName(file.path)}</span>
+                )}
+                {file.original && (
+                  <span className="change-dir">
+                    ← {baseName(file.original)}
+                  </span>
+                )}
+              </button>
+              <span
+                className={`change-letter git-${file.kind}`}
+                title={style.label}
+              >
+                {style.letter}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {detail.truncated && (
+        <p className="push-note">变更文件过多，只显示前 5,000 个。</p>
+      )}
+    </div>
+  );
+}
 
 /**
  * 推送确认框，参照 GoLand：上方为“本地分支 → 远程分支”，左侧列出待推送的提交，
@@ -203,40 +265,11 @@ export function PushDialog({ projectId, onPush, onClose }: Props) {
             变更文件 · {detail.files.length}
             {detail.truncated ? '+' : ''}
           </div>
-          {!detail.files.length && (
-            <p className="push-note">此提交未改动项目目录内的文件。</p>
-          )}
-          {detail.files.map((file) => {
-            const style = changeStyle[file.kind];
-            return (
-              <div key={file.path} className="change-row">
-                <button
-                  className={`change-name git-${file.kind}`}
-                  title={`${file.original ? `${file.original} → ` : ''}${file.path} · ${style.label}，点击查看 Diff`}
-                  onClick={() => void openFile(commit, file)}
-                >
-                  <span className="change-file">{baseName(file.path)}</span>
-                  {dirName(file.path) && (
-                    <span className="change-dir">{dirName(file.path)}</span>
-                  )}
-                  {file.original && (
-                    <span className="change-dir">
-                      ← {baseName(file.original)}
-                    </span>
-                  )}
-                </button>
-                <span
-                  className={`change-letter git-${file.kind}`}
-                  title={style.label}
-                >
-                  {style.letter}
-                </span>
-              </div>
-            );
-          })}
-          {detail.truncated && (
-            <p className="push-note">变更文件过多，只显示前 5,000 个。</p>
-          )}
+          <CommitFiles
+            key={detail.hash}
+            detail={detail}
+            onOpen={(file) => void openFile(commit, file)}
+          />
         </div>
       </>
     );

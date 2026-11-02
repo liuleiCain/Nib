@@ -1781,10 +1781,16 @@ button.commit-branch svg:last-child {
   background: #e8c06224;
   color: #d9bf84;
 }
+/* 展开提交的详情按行虚拟化，每行共用背景，最后一行收尾。 */
 .log-detail {
-  padding: 4px 0 8px;
   background: #ffffff03;
+}
+.log-detail.last {
+  padding-bottom: 8px;
   border-bottom: 1px solid #ffffff08;
+}
+.log-detail-head {
+  padding: 4px 0;
 }
 .log-message {
   margin: 0 12px 6px 24px;
@@ -1814,9 +1820,6 @@ button.commit-branch svg:last-child {
 }
 .log-hash:hover {
   color: var(--text);
-}
-.log-files {
-  margin-top: 4px;
 }
 .log-detail-message {
   display: flex;
@@ -2120,6 +2123,13 @@ button.commit-branch svg:last-child {
   font-weight: 500;
 }
 .push-file-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* 文件标题固定，只滚动文件行，便于虚拟列表计算位置。 */
+.push-file-scroll {
   flex: 1;
   min-height: 0;
   overflow: auto;

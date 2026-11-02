@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CaseSensitive,
   ChevronDown,
@@ -16,6 +16,7 @@ import type {
   SearchResult,
 } from '../../lib/backend';
 import { backend, errorCode, errorMessage } from '../../lib/backend';
+import { useVirtualRows } from '../../lib/virtual';
 
 interface Props {
   projectId: number;
@@ -37,6 +38,13 @@ const toggles: {
   { key: 'regex', label: '正则表达式', icon: Regex },
   { key: 'includeIgnored', label: '包含被 .gitignore 忽略的文件', icon: Eye },
 ];
+
+type SearchFile = SearchResult['files'][number];
+
+/** 拍平后的搜索结果行：文件标题或匹配处；文件以 NUL 开头的路径为 key，匹配用“路径:行:列”。 */
+type Row =
+  | { kind: 'file'; key: string; file: SearchFile; open: boolean }
+  | { kind: 'match'; key: string; file: SearchFile; match: SearchMatch };
 
 const baseName = (path: string) => path.split('/').pop() ?? path;
 const dirName = (path: string) => {
@@ -137,6 +145,29 @@ export function SearchPanel({ projectId, focus, onOpen }: Props) {
 
   const fileCount = result?.files.length ?? 0;
 
+  const rows = useMemo(() => {
+    const list: Row[] = [];
+    for (const file of result?.files ?? []) {
+      const open = !collapsed.has(file.path);
+      list.push({ kind: 'file', key: `\0${file.path}`, file, open });
+      if (open)
+        for (const match of file.matches)
+          list.push({
+            kind: 'match',
+            key: `${file.path}:${match.line}:${match.column}`,
+            file,
+            match,
+          });
+    }
+    return list;
+  }, [result, collapsed]);
+
+  const { scrollRef, items, spacer, measure } = useVirtualRows<HTMLDivElement>(
+    rows.length,
+    (index) => (rows[index].kind === 'file' ? 24 : 22),
+    (index) => rows[index].key,
+  );
+
   return (
     <div className="search-panel">
       <div className="search-box">
@@ -201,49 +232,65 @@ export function SearchPanel({ projectId, focus, onOpen }: Props) {
         )}
       </div>
 
-      <div className="search-results" role="tree" aria-label="搜索结果">
-        {result?.files.map((file) => {
-          const open = !collapsed.has(file.path);
-          return (
-            <div key={file.path} className="search-file">
-              <button
-                className="search-file-title"
-                title={file.path}
-                onClick={() => toggle(file.path)}
+      <div
+        ref={scrollRef}
+        className="search-results"
+        role="tree"
+        aria-label="搜索结果"
+      >
+        <div style={spacer}>
+          {items.map((item) => {
+            const row = rows[item.index];
+            return (
+              <div
+                key={item.key}
+                ref={measure}
+                data-index={item.index}
+                role="none"
               >
-                {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                <span className="search-file-name">{baseName(file.path)}</span>
-                <span className="search-file-dir">{dirName(file.path)}</span>
-                <span className="change-count">
-                  {file.matches.length}
-                  {file.truncated ? '+' : ''}
-                </span>
-              </button>
-              {open &&
-                file.matches.map((match) => {
-                  const key = `${file.path}:${match.line}:${match.column}`;
-                  return (
-                    <button
-                      key={key}
-                      className={`search-match ${selected === key ? 'selected' : ''}`}
-                      title={`${file.path}:${match.line}`}
-                      onClick={() => {
-                        setSelected(key);
-                        onOpen(file.path, match);
-                      }}
-                    >
-                      <span className="search-line">{match.line}</span>
-                      <span className="search-preview">
-                        {match.before}
-                        <mark>{match.matched}</mark>
-                        {match.after}
-                      </span>
-                    </button>
-                  );
-                })}
-            </div>
-          );
-        })}
+                {row.kind === 'file' ? (
+                  <button
+                    className="search-file-title"
+                    title={row.file.path}
+                    onClick={() => toggle(row.file.path)}
+                  >
+                    {row.open ? (
+                      <ChevronDown size={12} />
+                    ) : (
+                      <ChevronRight size={12} />
+                    )}
+                    <span className="search-file-name">
+                      {baseName(row.file.path)}
+                    </span>
+                    <span className="search-file-dir">
+                      {dirName(row.file.path)}
+                    </span>
+                    <span className="change-count">
+                      {row.file.matches.length}
+                      {row.file.truncated ? '+' : ''}
+                    </span>
+                  </button>
+                ) : (
+                  <button
+                    className={`search-match ${selected === row.key ? 'selected' : ''}`}
+                    title={`${row.file.path}:${row.match.line}`}
+                    onClick={() => {
+                      setSelected(row.key);
+                      onOpen(row.file.path, row.match);
+                    }}
+                  >
+                    <span className="search-line">{row.match.line}</span>
+                    <span className="search-preview">
+                      {row.match.before}
+                      <mark>{row.match.matched}</mark>
+                      {row.match.after}
+                    </span>
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
       <p className="search-note">搜索磁盘上的内容，不含未保存的编辑。</p>
     </div>

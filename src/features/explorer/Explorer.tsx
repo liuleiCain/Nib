@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -11,6 +11,7 @@ import {
   RotateCw,
 } from 'lucide-react';
 import { backend, errorCode, errorMessage } from '../../lib/backend';
+import { useVirtualRows } from '../../lib/virtual';
 import { changeStyle } from '../git/CommitPanel';
 import type { TreeShortcut } from './ContextMenu';
 import { shortcut } from './ContextMenu';
@@ -58,6 +59,33 @@ interface Props {
   onContextMenu: (target: TreeTarget, x: number, y: number) => void;
   onShortcut: (target: TreeTarget, shortcut: TreeShortcut) => void;
 }
+
+/** 拍平后的文件树行：条目，或目录的读取中、错误、空目录、跳过提示；非条目的 key 以 NUL 开头，不会与路径冲突。 */
+type Row =
+  | {
+      kind: 'entry';
+      key: string;
+      entry: FileEntry;
+      depth: number;
+      /** 在所属目录中的序号与总数，供读屏软件定位。 */
+      position: number;
+      size: number;
+    }
+  | { kind: 'loading' | 'empty'; key: string; path: string; depth: number }
+  | {
+      kind: 'error';
+      key: string;
+      path: string;
+      depth: number;
+      message: string;
+    }
+  | {
+      kind: 'skipped';
+      key: string;
+      path: string;
+      depth: number;
+      count: number;
+    };
 
 interface Branch {
   directory?: Directory;
@@ -185,114 +213,168 @@ export function Explorer({
     if (!branches[entry.path]?.directory) void load(entry.path);
   }
 
-  function directory(path: string, depth: number): React.ReactNode {
+  /** 把已展开的目录拍平成行，交给虚拟列表只渲染可见部分。 */
+  function flatten(path: string, depth: number, rows: Row[]) {
     const branch = branches[path];
     // 刷新期间保留已有列表，避免实时刷新时文件树闪烁。
-    if (!branch || (branch.loading && !branch.directory))
-      return (
-        <div className="tree-message" style={{ paddingLeft: 18 + depth * 14 }}>
-          <LoaderCircle size={13} className="spin" /> 读取中…
-        </div>
-      );
-    if (branch.error)
-      return (
-        <div className="tree-error">
-          <span>{branch.error}</span>
-          <button onClick={() => void load(path)}>重试</button>
-        </div>
-      );
+    if (!branch || (branch.loading && !branch.directory)) {
+      rows.push({ kind: 'loading', key: `\0loading:${path}`, path, depth });
+      return;
+    }
+    if (branch.error) {
+      rows.push({
+        kind: 'error',
+        key: `\0error:${path}`,
+        path,
+        depth,
+        message: branch.error,
+      });
+      return;
+    }
     const entries = branch.directory?.entries ?? [];
+    if (entries.length === 0)
+      rows.push({ kind: 'empty', key: `\0empty:${path}`, path, depth });
+    entries.forEach((entry, index) => {
+      rows.push({
+        kind: 'entry',
+        key: entry.path,
+        entry,
+        depth,
+        position: index + 1,
+        size: entries.length,
+      });
+      if (entry.isDir && expanded.has(entry.path))
+        flatten(entry.path, depth + 1, rows);
+    });
+    if (branch.directory?.skippedNames)
+      rows.push({
+        kind: 'skipped',
+        key: `\0skipped:${path}`,
+        path,
+        depth,
+        count: branch.directory.skippedNames,
+      });
+  }
+
+  const rows = useMemo(() => {
+    const result: Row[] = [];
+    flatten('', 0, result);
+    return result;
+  }, [branches, expanded]);
+
+  const { scrollRef, items, spacer, measure } = useVirtualRows<HTMLDivElement>(
+    rows.length,
+    (index) => (rows[index].kind === 'entry' ? 28 : 34),
+    (index) => rows[index].key,
+  );
+
+  function entryRow(row: Extract<Row, { kind: 'entry' }>) {
+    const { entry, depth } = row;
     return (
-      <>
-        {entries.length === 0 && (
+      <button
+        role="treeitem"
+        aria-expanded={entry.isDir ? expanded.has(entry.path) : undefined}
+        aria-selected={selected === entry.path}
+        aria-level={depth + 1}
+        aria-posinset={row.position}
+        aria-setsize={row.size}
+        className={`tree-row ${selected === entry.path ? 'selected' : ''} ${marked === entry.path ? 'marked' : ''}`}
+        style={{ paddingLeft: 12 + depth * 14 }}
+        title={entry.path}
+        onClick={() => toggle(entry)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onContextMenu(entry, event.clientX, event.clientY);
+        }}
+        onKeyDown={(event) => {
+          const action = shortcut(event);
+          if (!action) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onShortcut(entry, action);
+        }}
+      >
+        {entry.isDir ? (
+          expanded.has(entry.path) ? (
+            <ChevronDown size={13} />
+          ) : (
+            <ChevronRight size={13} />
+          )
+        ) : (
+          <span className="tree-indent" />
+        )}
+        {entry.isDir ? (
+          expanded.has(entry.path) ? (
+            <FolderOpen size={15} className="folder-icon" />
+          ) : (
+            <Folder size={15} className="folder-icon" />
+          )
+        ) : entry.isSymlink ? (
+          <Link2 size={14} />
+        ) : /\.(go|rs|[jt]sx?|json|ya?ml)$/.test(entry.name) ? (
+          <FileCode2 size={14} className="code-icon" />
+        ) : (
+          <File size={14} />
+        )}
+        <span
+          className={
+            entry.isDir
+              ? gitDirs.has(entry.path)
+                ? 'git-dir'
+                : undefined
+              : gitKinds.has(entry.path)
+                ? `git-${gitKinds.get(entry.path)}`
+                : undefined
+          }
+        >
+          {entry.name}
+        </span>
+        {!entry.isDir && gitKinds.has(entry.path) && (
+          // 字母与颜色同时标示状态，不依赖颜色辨认。
+          <span
+            className={`tree-git git-${gitKinds.get(entry.path)}`}
+            title={changeStyle[gitKinds.get(entry.path)!].label}
+          >
+            {changeStyle[gitKinds.get(entry.path)!].letter}
+          </span>
+        )}
+      </button>
+    );
+  }
+
+  function messageRow(row: Exclude<Row, { kind: 'entry' }>) {
+    switch (row.kind) {
+      case 'loading':
+        return (
           <div
             className="tree-message"
-            style={{ paddingLeft: 18 + depth * 14 }}
+            style={{ paddingLeft: 18 + row.depth * 14 }}
+          >
+            <LoaderCircle size={13} className="spin" /> 读取中…
+          </div>
+        );
+      case 'error':
+        return (
+          <div className="tree-error">
+            <span>{row.message}</span>
+            <button onClick={() => void load(row.path)}>重试</button>
+          </div>
+        );
+      case 'empty':
+        return (
+          <div
+            className="tree-message"
+            style={{ paddingLeft: 18 + row.depth * 14 }}
           >
             空文件夹
           </div>
-        )}
-        {entries.map((entry) => (
-          <div key={entry.path} role="none">
-            <button
-              role="treeitem"
-              aria-expanded={entry.isDir ? expanded.has(entry.path) : undefined}
-              aria-selected={selected === entry.path}
-              aria-level={depth + 1}
-              className={`tree-row ${selected === entry.path ? 'selected' : ''} ${marked === entry.path ? 'marked' : ''}`}
-              style={{ paddingLeft: 12 + depth * 14 }}
-              title={entry.path}
-              onClick={() => toggle(entry)}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onContextMenu(entry, event.clientX, event.clientY);
-              }}
-              onKeyDown={(event) => {
-                const action = shortcut(event);
-                if (!action) return;
-                event.preventDefault();
-                event.stopPropagation();
-                onShortcut(entry, action);
-              }}
-            >
-              {entry.isDir ? (
-                expanded.has(entry.path) ? (
-                  <ChevronDown size={13} />
-                ) : (
-                  <ChevronRight size={13} />
-                )
-              ) : (
-                <span className="tree-indent" />
-              )}
-              {entry.isDir ? (
-                expanded.has(entry.path) ? (
-                  <FolderOpen size={15} className="folder-icon" />
-                ) : (
-                  <Folder size={15} className="folder-icon" />
-                )
-              ) : entry.isSymlink ? (
-                <Link2 size={14} />
-              ) : /\.(go|rs|[jt]sx?|json|ya?ml)$/.test(entry.name) ? (
-                <FileCode2 size={14} className="code-icon" />
-              ) : (
-                <File size={14} />
-              )}
-              <span
-                className={
-                  entry.isDir
-                    ? gitDirs.has(entry.path)
-                      ? 'git-dir'
-                      : undefined
-                    : gitKinds.has(entry.path)
-                      ? `git-${gitKinds.get(entry.path)}`
-                      : undefined
-                }
-              >
-                {entry.name}
-              </span>
-              {!entry.isDir && gitKinds.has(entry.path) && (
-                // 字母与颜色同时标示状态，不依赖颜色辨认。
-                <span
-                  className={`tree-git git-${gitKinds.get(entry.path)}`}
-                  title={changeStyle[gitKinds.get(entry.path)!].label}
-                >
-                  {changeStyle[gitKinds.get(entry.path)!].letter}
-                </span>
-              )}
-            </button>
-            {entry.isDir && expanded.has(entry.path) && (
-              <div role="group">{directory(entry.path, depth + 1)}</div>
-            )}
-          </div>
-        ))}
-        {Boolean(branch.directory?.skippedNames) && (
-          <p className="tree-message">
-            已跳过 {branch.directory?.skippedNames} 个非 Unicode 文件名
-          </p>
-        )}
-      </>
-    );
+        );
+      case 'skipped':
+        return (
+          <p className="tree-message">已跳过 {row.count} 个非 Unicode 文件名</p>
+        );
+    }
   }
 
   return (
@@ -323,6 +405,7 @@ export function Explorer({
         </button>
       </div>
       <div
+        ref={scrollRef}
         className="file-tree"
         role="tree"
         aria-label="项目文件"
@@ -335,7 +418,21 @@ export function Explorer({
           );
         }}
       >
-        {directory('', 0)}
+        <div style={spacer}>
+          {items.map((item) => {
+            const row = rows[item.index];
+            return (
+              <div
+                key={item.key}
+                ref={measure}
+                data-index={item.index}
+                role="none"
+              >
+                {row.kind === 'entry' ? entryRow(row) : messageRow(row)}
+              </div>
+            );
+          })}
+        </div>
       </div>
       <div className="explorer-note">按需加载 · 隐藏构建与依赖目录</div>
     </>

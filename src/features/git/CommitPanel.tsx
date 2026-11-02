@@ -19,6 +19,7 @@ import {
 import type { ChangeKind, FileChange, GitStatus } from '../../lib/backend';
 import type { TreeShortcut } from '../explorer/ContextMenu';
 import { shortcut } from '../explorer/ContextMenu';
+import { useVirtualRows } from '../../lib/virtual';
 
 /** 文件状态的字母、颜色类和说明，与 GoLand 的着色习惯一致。 */
 export const changeStyle: Record<
@@ -87,6 +88,21 @@ interface Group {
   files: FileChange[];
 }
 
+/** 拍平后的变更列表行：分组标题、目录或文件；文件以路径为 key，其余以 NUL 开头。 */
+type Row =
+  | { kind: 'group'; key: string; group: Group; open: boolean }
+  | {
+      kind: 'folder';
+      key: string;
+      /** 折叠状态的标识，不同分组中的同名目录共用。 */
+      toggleKey: string;
+      label: string;
+      depth: number;
+      files: FileChange[];
+      open: boolean;
+    }
+  | { kind: 'file'; key: string; file: FileChange; depth: number };
+
 const baseName = (path: string) => path.split('/').pop() ?? path;
 const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
 const dirName = (path: string) => {
@@ -146,6 +162,26 @@ export function CommitPanel({
     ].filter((group) => group.files.length);
   }, [repository]);
 
+  const rows = useMemo(() => {
+    const result: Row[] = [];
+    for (const group of groups) {
+      const open = !collapsed.has(group.key);
+      result.push({ kind: 'group', key: `\0${group.key}`, group, open });
+      if (!open) continue;
+      if (tree) treeRows(group, group.files, '', 1, result);
+      else
+        for (const file of group.files)
+          result.push({ kind: 'file', key: file.path, file, depth: 1 });
+    }
+    return result;
+  }, [groups, tree, collapsed]);
+
+  const { scrollRef, items, spacer, measure } = useVirtualRows<HTMLDivElement>(
+    rows.length,
+    (index) => (rows[index].kind === 'folder' ? 24 : 26),
+    (index) => rows[index].key,
+  );
+
   if (!status && loading)
     return (
       <div className="git-empty">
@@ -199,7 +235,7 @@ export function CommitPanel({
   const canCommit =
     !committing && !blocked && selectedCount > 0 && message.trim().length > 0;
 
-  function row(file: FileChange, depth: number, label: string) {
+  function fileRow(file: FileChange, depth: number, label: string) {
     const style = changeStyle[file.kind];
     return (
       <div
@@ -276,7 +312,13 @@ export function CommitPanel({
   }
 
   /** 按目录分组显示，单一子目录的链路合并为一行。 */
-  function treeRows(files: FileChange[], prefix: string, depth: number) {
+  function treeRows(
+    group: Group,
+    files: FileChange[],
+    prefix: string,
+    depth: number,
+    result: Row[],
+  ) {
     const directories = new Map<string, FileChange[]>();
     const leaves: FileChange[] = [];
     for (const file of files) {
@@ -285,10 +327,11 @@ export function CommitPanel({
       if (slash < 0) leaves.push(file);
       else {
         const name = rest.slice(0, slash);
-        directories.set(name, [...(directories.get(name) ?? []), file]);
+        const children = directories.get(name);
+        if (children) children.push(file);
+        else directories.set(name, [file]);
       }
     }
-    const nodes: React.ReactNode[] = [];
     for (const [name, children] of [...directories].sort(([a], [b]) =>
       a.localeCompare(b),
     )) {
@@ -309,31 +352,89 @@ export function CommitPanel({
           path += `${parts[0][0]}/`;
         } else break;
       }
-      const key = `dir:${path}`;
-      const open = !collapsed.has(key);
-      nodes.push(
-        <div key={key}>
-          <button
-            className="change-folder"
-            style={{ paddingLeft: 10 + depth * 14 }}
-            onClick={() => toggle(key)}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              onGroupMenu(children, event.clientX, event.clientY);
-            }}
-          >
-            {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-            <span>{label}</span>
-            <span className="change-count">{children.length}</span>
-          </button>
-          {open && treeRows(children, path, depth + 1)}
-        </div>,
-      );
+      const toggleKey = `dir:${path}`;
+      const open = !collapsed.has(toggleKey);
+      result.push({
+        kind: 'folder',
+        key: `\0${group.key}:${toggleKey}`,
+        toggleKey,
+        label,
+        depth,
+        files: children,
+        open,
+      });
+      if (open) treeRows(group, children, path, depth + 1, result);
     }
     for (const file of leaves.sort((a, b) => a.path.localeCompare(b.path)))
-      nodes.push(row(file, depth, baseName(file.path)));
-    return nodes;
+      result.push({ kind: 'file', key: file.path, file, depth });
+  }
+
+  function folderRow(row: Extract<Row, { kind: 'folder' }>) {
+    return (
+      <button
+        className="change-folder"
+        style={{ paddingLeft: 10 + row.depth * 14 }}
+        onClick={() => toggle(row.toggleKey)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onGroupMenu(row.files, event.clientX, event.clientY);
+        }}
+      >
+        {row.open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <span>{row.label}</span>
+        <span className="change-count">{row.files.length}</span>
+      </button>
+    );
+  }
+
+  function groupRow({ group, open }: Extract<Row, { kind: 'group' }>) {
+    const paths = group.files.map((file) => file.path);
+    const count = paths.filter((path) => checked.has(path)).length;
+    return (
+      <div
+        className="change-group-title"
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onGroupMenu(group.files, event.clientX, event.clientY);
+        }}
+      >
+        <button
+          aria-label={open ? '折叠' : '展开'}
+          onClick={() => toggle(group.key)}
+        >
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </button>
+        <input
+          type="checkbox"
+          aria-label={`全选${group.title}`}
+          checked={count === paths.length}
+          ref={(input) => {
+            if (input) input.indeterminate = count > 0 && count < paths.length;
+          }}
+          onChange={(event) => onCheck(paths, event.target.checked)}
+        />
+        <span>{group.title}</span>
+        {group.key === 'untracked' && (
+          <button
+            className="change-group-action"
+            title={
+              count
+                ? '将勾选的未跟踪文件加入版本控制（不提交）'
+                : '将全部未跟踪文件加入版本控制（不提交）'
+            }
+            onClick={() =>
+              onAdd(count ? paths.filter((path) => checked.has(path)) : paths)
+            }
+          >
+            <Plus size={11} />
+            {count ? `加入勾选的 ${count} 个` : '全部加入'}
+          </button>
+        )}
+        <span className="change-count">{paths.length} 个文件</span>
+      </div>
+    );
   }
 
   function toggle(key: string) {
@@ -445,74 +546,32 @@ export function CommitPanel({
         </div>
       )}
 
-      <div className="change-list" role="tree" aria-label="变更文件">
+      <div
+        ref={scrollRef}
+        className="change-list"
+        role="tree"
+        aria-label="变更文件"
+      >
         {!total && <p className="change-empty">没有变更</p>}
-        {groups.map((group) => {
-          const paths = group.files.map((file) => file.path);
-          const count = paths.filter((path) => checked.has(path)).length;
-          const open = !collapsed.has(group.key);
-          return (
-            <div key={group.key} className="change-group">
+        <div style={spacer}>
+          {items.map((item) => {
+            const row = rows[item.index];
+            return (
               <div
-                className="change-group-title"
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onGroupMenu(group.files, event.clientX, event.clientY);
-                }}
+                key={item.key}
+                ref={measure}
+                data-index={item.index}
+                role="none"
               >
-                <button
-                  aria-label={open ? '折叠' : '展开'}
-                  onClick={() => toggle(group.key)}
-                >
-                  {open ? (
-                    <ChevronDown size={12} />
-                  ) : (
-                    <ChevronRight size={12} />
-                  )}
-                </button>
-                <input
-                  type="checkbox"
-                  aria-label={`全选${group.title}`}
-                  checked={count === paths.length}
-                  ref={(input) => {
-                    if (input)
-                      input.indeterminate = count > 0 && count < paths.length;
-                  }}
-                  onChange={(event) => onCheck(paths, event.target.checked)}
-                />
-                <span>{group.title}</span>
-                {group.key === 'untracked' && (
-                  <button
-                    className="change-group-action"
-                    title={
-                      count
-                        ? '将勾选的未跟踪文件加入版本控制（不提交）'
-                        : '将全部未跟踪文件加入版本控制（不提交）'
-                    }
-                    onClick={() =>
-                      onAdd(
-                        count
-                          ? paths.filter((path) => checked.has(path))
-                          : paths,
-                      )
-                    }
-                  >
-                    <Plus size={11} />
-                    {count ? `加入勾选的 ${count} 个` : '全部加入'}
-                  </button>
-                )}
-                <span className="change-count">{paths.length} 个文件</span>
+                {row.kind === 'group'
+                  ? groupRow(row)
+                  : row.kind === 'folder'
+                    ? folderRow(row)
+                    : fileRow(row.file, row.depth, baseName(row.file.path))}
               </div>
-              {open &&
-                (tree
-                  ? treeRows(group.files, '', 1)
-                  : group.files.map((file) =>
-                      row(file, 1, baseName(file.path)),
-                    ))}
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
         {repository.truncated && (
           <p className="change-empty">变更过多，只显示前 5,000 个文件。</p>
         )}
