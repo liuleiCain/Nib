@@ -8,6 +8,7 @@ export type MenuItem =
       /** 快捷键提示，只填写实际可用的快捷键。 */
       hint?: string;
       danger?: boolean;
+      disabled?: boolean;
       action: () => void;
     };
 
@@ -44,7 +45,7 @@ interface Props {
   onClose: () => void;
 }
 
-/** 文件树右键菜单：限制在窗口内显示，方向键切换，Esc 或点击外部关闭。 */
+/** 通用右键菜单：限制在窗口内显示，方向键跳过禁用项，Esc 或点击外部关闭。 */
 export function ContextMenu({ x, y, items, onClose }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y });
@@ -57,7 +58,7 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
       left: Math.max(4, Math.min(x, window.innerWidth - width - 4)),
       top: Math.max(4, Math.min(y, window.innerHeight - height - 4)),
     });
-    menu.querySelector<HTMLButtonElement>('button')?.focus();
+    menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
   }, [x, y]);
 
   useEffect(() => {
@@ -76,7 +77,9 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
 
   function move(step: 1 | -1) {
     const buttons = [
-      ...container.current!.querySelectorAll<HTMLButtonElement>('button'),
+      ...container.current!.querySelectorAll<HTMLButtonElement>(
+        'button:not(:disabled)',
+      ),
     ];
     const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
     buttons[(index + step + buttons.length) % buttons.length]?.focus();
@@ -109,6 +112,7 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
           <button
             key={index}
             role="menuitem"
+            disabled={item.disabled}
             className={item.danger ? 'danger' : undefined}
             onClick={() => {
               onClose();

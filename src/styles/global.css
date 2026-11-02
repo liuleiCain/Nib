@@ -389,6 +389,7 @@ kbd {
 }
 .tab-bar {
   height: 39px;
+  user-select: none;
   flex-shrink: 0;
   display: flex;
   justify-content: space-between;
@@ -460,13 +461,6 @@ kbd {
   color: #5b6871;
   font-size: 11px;
   padding: 12px 19px;
-}
-.tab-actions {
-  display: flex;
-  align-items: center;
-  padding: 0 10px;
-  gap: 4px;
-  background: #191d21;
 }
 .breadcrumbs {
   min-height: 30px;
@@ -1630,7 +1624,7 @@ button.commit-branch svg:last-child {
   font-size: 12px;
   text-align: left;
 }
-.context-menu button:hover,
+.context-menu button:not(:disabled):hover,
 .context-menu button:focus-visible {
   background: #8fb6a92b;
   color: #e3ecea;

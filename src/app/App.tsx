@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import type { EditorState } from '@codemirror/state';
 import { Transaction } from '@codemirror/state';
@@ -18,7 +18,6 @@ import {
   ChevronRight,
   ChevronsLeftRight,
   Command,
-  Ellipsis,
   FileCode2,
   Files,
   FolderOpen,
@@ -34,7 +33,6 @@ import {
   PenLine,
   Radio,
   RotateCw,
-  Save,
   Search,
   SettingsIcon,
   Trash2,
@@ -368,7 +366,7 @@ export function App() {
   } | null>(null);
   // 远程操作后递增，让提交记录重新读取远程分支标记。
   const [refsVersion, setRefsVersion] = useState(0);
-  // 文件树右键菜单、名称输入框，以及新建后需要展开的目录。
+  // 文件树与标签栏共用右键菜单；名称输入框及新建后需要展开的目录。
   const [menu, setMenu] = useState<{
     items: () => MenuItem[];
     /** 文件树中高亮的条目。 */
@@ -2467,6 +2465,87 @@ export function App() {
     }
   }
 
+  /** 按标签栏的可见顺序返回标识，普通文件、Diff 和实时预览共用关闭范围。 */
+  function editorTabKeys() {
+    return [
+      ...tabsRef.current.map((tab) => tab.path),
+      ...diffsRef.current.map((diff) => DIFF_PREFIX + diff.key),
+      ...(liveOpen ? [LIVE_TAB] : []),
+    ];
+  }
+
+  /** 整组确认未保存内容后再关闭，取消或保存失败时保留全部目标标签。 */
+  async function closeEditorTabs(keys: string[]) {
+    if (!idle() || !keys.length) return;
+    const projectId = projectRef.current!.id;
+    const remove = new Set(keys);
+    busyRef.current = true;
+    setBusy('关闭标签页');
+    try {
+      const candidates = tabsRef.current.filter((tab) => remove.has(tab.path));
+      if (!(await mayDiscard(candidates))) return;
+      if (projectRef.current?.id !== projectId) return;
+      const old = editorTabKeys();
+      const remaining = old.filter((key) => !remove.has(key));
+      const current = activeRef.current;
+      desiredFile.current = null;
+      setOpening(null);
+      updateTabs(tabsRef.current.filter((tab) => !remove.has(tab.path)));
+      updateDiffs(
+        diffsRef.current.filter((diff) => !remove.has(DIFF_PREFIX + diff.key)),
+      );
+      if (remove.has(LIVE_TAB)) setLiveOpen(false);
+      if (current && remove.has(current)) {
+        const index = old.indexOf(current);
+        activate(
+          old.slice(index + 1).find((key) => !remove.has(key)) ??
+            old
+              .slice(0, index)
+              .reverse()
+              .find((key) => !remove.has(key)) ??
+            remaining[0] ??
+            null,
+        );
+      }
+    } finally {
+      busyRef.current = false;
+      setBusy(null);
+    }
+  }
+
+  /** 右键以命中的标签为基准，保持当前阅读标签不变。 */
+  function showTabMenu(event: ReactMouseEvent, key: string) {
+    event.preventDefault();
+    if (!idle()) return;
+    setMenu({
+      marked: null,
+      x: event.clientX,
+      y: event.clientY,
+      items: () => {
+        const keys = editorTabKeys();
+        const index = keys.indexOf(key);
+        if (index < 0) return [];
+        const closeItem = (label: string, targets: string[]): MenuItem => ({
+          label,
+          disabled: !targets.length,
+          action: () => void closeEditorTabs(targets),
+        });
+        return [
+          closeItem('关闭当前标签页', [key]),
+          closeItem(
+            '关闭其他标签页',
+            keys.filter((item) => item !== key),
+          ),
+          'separator',
+          closeItem('关闭左侧标签页', keys.slice(0, index)),
+          closeItem('关闭右侧标签页', keys.slice(index + 1)),
+          'separator',
+          closeItem('关闭全部标签页', keys),
+        ];
+      },
+    });
+  }
+
   /** 移除标签，不做未保存确认；关闭的是当前标签时切换到相邻标签或最后一个 Diff。 */
   function removeTabs(remove: Set<string>) {
     const old = tabsRef.current;
@@ -3840,6 +3919,7 @@ export function App() {
                 <div
                   key={tab.path}
                   className={`tab ${active === tab.path ? 'active' : ''}`}
+                  onContextMenu={(event) => showTabMenu(event, tab.path)}
                 >
                   <button
                     role="tab"
@@ -3858,7 +3938,15 @@ export function App() {
                     }}
                   >
                     <FileCode2 size={13} />
-                    <span>{baseName(tab.path)}</span>
+                    <span
+                      className={
+                        gitKinds.has(tab.path)
+                          ? `git-${gitKinds.get(tab.path)}`
+                          : undefined
+                      }
+                    >
+                      {baseName(tab.path)}
+                    </span>
                     {isDirty(tab) && (
                       <span
                         className={`dirty-dot ${tab.paused ? 'paused' : ''}`}
@@ -3882,6 +3970,9 @@ export function App() {
                 <div
                   key={DIFF_PREFIX + diff.key}
                   className={`tab diff-tab ${active === DIFF_PREFIX + diff.key ? 'active' : ''}`}
+                  onContextMenu={(event) =>
+                    showTabMenu(event, DIFF_PREFIX + diff.key)
+                  }
                 >
                   <button
                     role="tab"
@@ -3908,7 +3999,13 @@ export function App() {
                     ) : (
                       <GitCompare size={13} />
                     )}
-                    <span>
+                    <span
+                      className={
+                        !diff.commit && gitKinds.has(diff.path)
+                          ? `git-${gitKinds.get(diff.path)}`
+                          : undefined
+                      }
+                    >
                       {baseName(diff.path)}
                       {diff.commit && ` @ ${diff.commit.hash.slice(0, 7)}`}
                     </span>
@@ -3926,6 +4023,7 @@ export function App() {
               {liveOpen && project && (
                 <div
                   className={`tab live-tab ${active === LIVE_TAB ? 'active' : ''}`}
+                  onContextMenu={(event) => showTabMenu(event, LIVE_TAB)}
                 >
                   <button
                     role="tab"
@@ -3953,29 +4051,6 @@ export function App() {
               {!tabs.length && !diffs.length && !liveOpen && (
                 <span className="tab-placeholder">工作区</span>
               )}
-            </div>
-            <div className="tab-actions">
-              <button
-                className="icon-button"
-                disabled={!selected || saving.has(selected.path)}
-                onClick={() => selected && void saveTab(selected)}
-                title={`保存 (${mod}+S)`}
-                aria-label="保存"
-              >
-                {selected && saving.has(selected.path) ? (
-                  <LoaderCircle size={14} className="spin" />
-                ) : (
-                  <Save size={14} />
-                )}
-              </button>
-              <button
-                className="icon-button"
-                title="更多编辑操作"
-                aria-label="更多编辑操作"
-                onClick={showPalette}
-              >
-                <Ellipsis size={17} />
-              </button>
             </div>
           </div>
 
