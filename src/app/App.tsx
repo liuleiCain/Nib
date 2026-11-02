@@ -44,6 +44,7 @@ import type {
   ChangeKind,
   CommitFile,
   CommitSummary,
+  Document,
   FileChange,
   FileChanges,
   GitStatus,
@@ -58,6 +59,7 @@ import type {
 } from '../lib/backend';
 import { backend, desktop, errorCode, errorMessage } from '../lib/backend';
 import { Editor } from '../features/editor/Editor';
+import { ConflictDialog } from '../features/editor/ConflictDialog';
 import type { Tab } from '../features/editor/model';
 import {
   createTab,
@@ -379,6 +381,12 @@ export function App() {
   // 推送确认框，打开时记录项目 id，切换项目后不再显示。
   const [pushing, setPushingState] = useState<number | null>(null);
   const pushingRef = useRef<number | null>(null);
+  const [conflict, setConflict] = useState<{
+    projectId: number;
+    tab: Tab;
+  } | null>(null);
+  const conflictRef = useRef<typeof conflict>(null);
+  const [conflictVersion, setConflictVersion] = useState(0);
   const [treeReveal, setTreeReveal] = useState<TreeReveal>({
     key: 0,
     path: '',
@@ -452,6 +460,7 @@ export function App() {
 
   /** 保存标签；自动保存不弹成功提示，失败后暂停该标签的自动保存直到手动保存或重新加载。 */
   async function saveTab(tab: Tab, auto = false): Promise<boolean> {
+    if (conflictRef.current?.tab === tab) return false;
     const existing = saves.current.get(tab.path);
     if (existing) return existing;
     const workspace = projectRef.current;
@@ -518,7 +527,12 @@ export function App() {
   function autoSaveAll() {
     if (!autoSaveRef.current || promptRef.current) return;
     for (const tab of tabsRef.current)
-      if (isDirty(tab) && !tab.paused && !syncing.current.has(tab.path))
+      if (
+        isDirty(tab) &&
+        !tab.paused &&
+        !syncing.current.has(tab.path) &&
+        conflictRef.current?.tab !== tab
+      )
         void saveTab(tab, true);
   }
 
@@ -536,11 +550,12 @@ export function App() {
    * 外部修改后让标签与磁盘一致。
    *
    * 无未保存编辑时就地替换为磁盘内容，保留光标、滚动和撤销历史；有未保存编辑且磁盘也变化时
-   * 标记冲突并暂停自动保存，由用户选择重新加载或手动保存（保存仍会因版本冲突停止，不覆盖外部修改）。
+   * 标记冲突并暂停自动保存，由用户对比合并或重新加载；对比期间由对比框读取磁盘侧。
    */
   async function syncTab(path: string) {
     const workspace = projectRef.current;
     if (!workspace) return;
+    if (conflictRef.current?.tab.path === path) return;
     // 正在保存或同步时先排队，完成后再读一次，避免读到自己写入一半的结果。
     if (syncing.current.has(path) || saves.current.has(path)) {
       resync.current.add(path);
@@ -556,6 +571,7 @@ export function App() {
       const document = await backend.readFile(workspace.id, path);
       const tab = tabsRef.current.find((item) => item.path === path);
       if (!tab || projectRef.current?.id !== workspace.id) return;
+      if (conflictRef.current?.tab === tab) return;
       // 自己保存产生的事件：磁盘版本未变，无需处理。
       if (document.revision === tab.revision) {
         if (tab.paused && !isDirty(tab)) {
@@ -577,7 +593,7 @@ export function App() {
           tab.paused = true;
           updateTabs(tabsRef.current);
           notify(
-            `${baseName(path)} 已被外部修改，与未保存的编辑冲突。已暂停自动保存，可重新加载磁盘版本。`,
+            `${baseName(path)} 已被外部修改，与未保存的编辑冲突。已暂停自动保存，可点击“对比并处理”核对内容。`,
           );
         }
         return;
@@ -657,6 +673,16 @@ export function App() {
   function filesChanged(changes: FileChanges) {
     const workspace = projectRef.current;
     if (!workspace || changes.projectId !== workspace.id) return;
+    const conflictPath = conflictRef.current?.tab.path;
+    if (
+      conflictPath &&
+      (changes.rescan ||
+        changes.paths.some(
+          (path) =>
+            path === conflictPath || conflictPath.startsWith(`${path}/`),
+        ))
+    )
+      setConflictVersion((value) => value + 1);
     void live.record(changes);
     if (changes.rescan || changes.paths.length)
       setTreeChanges((previous) => ({
@@ -1116,6 +1142,7 @@ export function App() {
       !busyRef.current &&
       !promptRef.current &&
       !namingRef.current &&
+      !conflictRef.current &&
       pushingRef.current === null
     );
   }
@@ -2268,6 +2295,8 @@ export function App() {
     updateDiffs([]);
     setBranchPopup(null);
     setPushing(null);
+    conflictRef.current = null;
+    setConflict(null);
   }
 
   /** 切换或关闭项目时放弃上一个项目尚未写盘的展开记录。 */
@@ -2561,6 +2590,119 @@ export function App() {
       );
     }
     updateTabs(next);
+  }
+
+  /** 暂停自动保存后打开对比，处理期间磁盘更新只刷新左侧。 */
+  function compareDisk(tab: Tab) {
+    const workspace = projectRef.current;
+    if (!workspace || !idle()) return;
+    if (saves.current.has(tab.path) || syncing.current.has(tab.path)) {
+      notify('文件正在保存或同步，请稍后重试。');
+      return;
+    }
+    if (tab.state.doc.length > 5 * 1024 * 1024) {
+      notify(
+        '编辑内容超过 5 MiB，请先复制保留需要的内容，再重新加载磁盘版本。',
+      );
+      return;
+    }
+    tab.paused = true;
+    const next = { projectId: workspace.id, tab };
+    conflictRef.current = next;
+    setConflict(next);
+    updateTabs(tabsRef.current);
+  }
+
+  /** 合并草稿同步到原标签与恢复机制，保留可撤销的编辑历史。 */
+  function editConflict(content: string) {
+    const current = conflictRef.current;
+    if (
+      !current ||
+      current.projectId !== projectRef.current?.id ||
+      !tabsRef.current.includes(current.tab)
+    )
+      return;
+    const tab = current.tab;
+    const change = diffChange(tab.state.doc, content);
+    if (!change) return;
+    const spec = { changes: change, userEvent: 'input.merge' };
+    const view = viewRef.current;
+    if (view && activeRef.current === tab.path && view.state === tab.state) {
+      view.dispatch(spec);
+      tab.state = view.state;
+    } else tab.state = tab.state.update(spec).state;
+    updateTabs(tabsRef.current);
+  }
+
+  function closeConflict() {
+    const current = conflictRef.current;
+    conflictRef.current = null;
+    setConflict(null);
+    if (current && current.projectId === projectRef.current?.id)
+      void syncTab(current.tab.path);
+  }
+
+  /** 按用户核对的磁盘版本保存；期间发生外部修改时保留草稿并拒绝覆盖。 */
+  async function resolveConflict(
+    disk: Document,
+    content: string,
+    save: boolean,
+  ) {
+    const current = conflictRef.current;
+    if (
+      !current ||
+      current.projectId !== projectRef.current?.id ||
+      !tabsRef.current.includes(current.tab)
+    )
+      throw new Error('项目或文件已关闭，请重新打开后处理。');
+    const tab = current.tab;
+    if (
+      busyRef.current ||
+      saves.current.has(tab.path) ||
+      syncing.current.has(tab.path)
+    )
+      throw new Error('文件正在保存或同步，请稍后重试。');
+    busyRef.current = true;
+    setBusy('处理外部修改');
+    try {
+      let revision = disk.revision;
+      if (save) {
+        revision = await backend.saveFile(
+          current.projectId,
+          tab.path,
+          encode(content, disk.newline, disk.hasBom),
+          disk.revision,
+        );
+      } else {
+        const latest = await backend.readFile(current.projectId, tab.path);
+        if (latest.revision !== disk.revision)
+          throw new Error(
+            '磁盘内容再次变化，已停止处理。请核对最新磁盘内容后重试。',
+          );
+      }
+      if (
+        conflictRef.current !== current ||
+        projectRef.current?.id !== current.projectId
+      )
+        return;
+      editConflict(content);
+      tab.revision = revision;
+      tab.savedDoc = tab.state.doc;
+      tab.newline = disk.newline;
+      tab.hasBom = disk.hasBom;
+      tab.size = new TextEncoder().encode(
+        encode(content, disk.newline, disk.hasBom),
+      ).length;
+      tab.paused = false;
+      updateTabs(tabsRef.current);
+      notify(
+        save ? '已保存合并结果' : '已使用磁盘版本，可撤销恢复原来的编辑',
+        false,
+      );
+    } finally {
+      busyRef.current = false;
+      setBusy(null);
+    }
   }
 
   async function reloadFile() {
@@ -3068,6 +3210,12 @@ export function App() {
       disabled: !selected,
     },
     {
+      label: '对比并处理外部修改',
+      detail: '磁盘与编辑器内容',
+      action: () => selected && compareDisk(selected),
+      disabled: !selected?.paused,
+    },
+    {
       label: '重新加载磁盘版本',
       detail: '外部修改',
       action: () => void reloadFile(),
@@ -3372,7 +3520,8 @@ export function App() {
       if (
         promptRef.current ||
         namingRef.current ||
-        pushingRef.current !== null
+        pushingRef.current !== null ||
+        conflictRef.current !== null
       ) {
         if (['s', 'w', 'o', 'p', 'b', 'n', 'k', 'f', ','].includes(key))
           event.preventDefault();
@@ -3459,6 +3608,11 @@ export function App() {
     const listeners: (() => void)[] = [];
     const requestClose = () => {
       if (disposed || busyRef.current || promptRef.current) return;
+      if (conflictRef.current) {
+        notify('请先处理外部修改，或点击“保留编辑并返回”后再关闭窗口。');
+        void backend.cancelQuit();
+        return;
+      }
       busyRef.current = true;
       setBusy('关闭窗口');
       void (async () => {
@@ -3549,9 +3703,16 @@ export function App() {
 
   useEffect(() => {
     if (palette) paletteRef.current?.focus();
-    if (!palette && !quickOpen && !settings && !prompt && !projectMenu)
+    if (
+      !palette &&
+      !quickOpen &&
+      !settings &&
+      !prompt &&
+      !projectMenu &&
+      !conflict
+    )
       viewRef.current?.focus();
-  }, [palette, quickOpen, settings, prompt, projectMenu]);
+  }, [palette, quickOpen, settings, prompt, projectMenu, conflict]);
 
   const selection = selected?.state.selection.main;
   const line =
@@ -4096,6 +4257,14 @@ export function App() {
                     : '未保存到磁盘'}
                 </span>
               )}
+              {selected.paused && (
+                <button
+                  className="secondary-button"
+                  onClick={() => compareDisk(selected)}
+                >
+                  <GitCompare size={12} /> 对比并处理
+                </button>
+              )}
             </div>
           )}
 
@@ -4104,7 +4273,7 @@ export function App() {
               tab={selected}
               wrap={wrap}
               indent={tabSize}
-              locked={Boolean(busy) || Boolean(prompt)}
+              locked={Boolean(busy) || Boolean(prompt) || Boolean(conflict)}
               reveal={reveal}
               onChange={editorChange}
               viewRef={viewRef}
@@ -4554,6 +4723,23 @@ export function App() {
           onAction={branchAction}
         />
       )}
+      {conflict &&
+        project?.id === conflict.projectId &&
+        tabs.includes(conflict.tab) && (
+          <ConflictDialog
+            key={`${conflict.projectId}:${conflict.tab.path}`}
+            projectId={conflict.projectId}
+            path={conflict.tab.path}
+            initial={conflict.tab.state.doc.toString()}
+            version={conflictVersion}
+            indent={tabSize}
+            wrap={wrap}
+            onEdit={editConflict}
+            onResolve={resolveConflict}
+            onClose={closeConflict}
+          />
+        )}
+
       {pushing !== null && project?.id === pushing && (
         <PushDialog
           projectId={pushing}

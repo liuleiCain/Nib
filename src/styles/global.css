@@ -1962,6 +1962,70 @@ button.commit-branch svg:last-child {
 .push-dialog h2 svg {
   color: var(--accent);
 }
+.conflict-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(1180px, 94vw);
+  height: min(760px, 88vh);
+  min-height: 300px;
+  padding: 20px;
+  border: 1px solid #43514a;
+  border-radius: 8px;
+  background: #22292d;
+  box-shadow: 0 24px 90px #0008;
+}
+.conflict-dialog h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 500;
+}
+.conflict-dialog h2 span {
+  color: #94a59d;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.conflict-dialog > p {
+  color: #9aa9a2;
+  font-size: 11px;
+  line-height: 1.7;
+  margin: 10px 0 16px;
+}
+.conflict-headings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 10px 16px;
+  border: 1px solid #43514a;
+  border-bottom: 0;
+  background: #ffffff04;
+  font-size: 11px;
+  color: #bdcdc4;
+}
+.conflict-comparison {
+  border: 1px solid #43514a;
+  min-height: 0;
+}
+.conflict-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 8px 0;
+  font-size: 11px;
+  color: #a6b7ae;
+}
+.conflict-dialog .dialog-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.conflict-dialog .dialog-actions .primary-button {
+  margin-left: 0;
+}
+.conflict-dialog .dialog-actions .icon-button {
+  margin-right: auto;
+}
 .push-dialog .dialog-actions {
   justify-content: flex-end;
 }
