@@ -88,6 +88,7 @@ interface Group {
 }
 
 const baseName = (path: string) => path.split('/').pop() ?? path;
+const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
 const dirName = (path: string) => {
   const slash = path.lastIndexOf('/');
   return slash < 0 ? '' : path.slice(0, slash);
@@ -376,7 +377,7 @@ export function CommitPanel({
         </button>
         <button
           className="icon-button"
-          title={`推送${repository.upstream ? ` · ${repository.upstream}` : '（未设置上游）'}`}
+          title={`推送 (${mod} ⇧ K)${repository.upstream ? ` · ${repository.upstream}` : '（未设置上游）'}`}
           aria-label="推送"
           disabled={Boolean(remoteTask)}
           onClick={onPush}

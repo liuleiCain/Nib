@@ -1962,6 +1962,12 @@ button.commit-branch svg:last-child {
 .push-dialog h2 svg {
   color: var(--accent);
 }
+.push-dialog .dialog-actions {
+  justify-content: flex-end;
+}
+.push-dialog .dialog-actions .primary-button {
+  margin-left: 0;
+}
 .push-target {
   display: flex;
   align-items: center;
@@ -2029,9 +2035,30 @@ button.commit-branch svg:last-child {
 .push-files {
   flex: 1;
   min-width: 0;
-  overflow: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+.push-description {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 55%;
+  flex-shrink: 0;
+  border-bottom: 1px solid #71867e80;
+  background: #ffffff04;
+}
+.push-section-heading {
+  flex-shrink: 0;
+  padding: 8px 12px 4px;
+  color: #93aaa1;
+  font-size: 10px;
+  font-weight: 500;
+}
+.push-file-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 .push-files .change-row {
   padding-left: 12px;
@@ -2064,8 +2091,20 @@ button.commit-branch svg:last-child {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 120px;
-  overflow: auto;
-  flex-shrink: 0;
+  min-height: 0;
+  overflow-y: scroll;
+  scrollbar-color: #82958e99 #ffffff08;
+  scrollbar-gutter: stable;
+}
+.push-message::-webkit-scrollbar-track {
+  background: #ffffff08;
+}
+.push-message::-webkit-scrollbar-thumb {
+  background-color: #82958e99;
+}
+.push-message:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 .push-diff {
   flex: 1;

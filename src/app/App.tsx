@@ -413,6 +413,7 @@ export function App() {
     autoSave: () => {},
     filesChanged: (_changes: FileChanges) => {},
     commitPanel: () => {},
+    push: () => {},
     gitRefresh: () => {},
     addToVcs: () => {},
   });
@@ -2988,7 +2989,7 @@ export function App() {
     },
     {
       label: '推送 (Push)',
-      detail: 'Git',
+      detail: `${mod} ⇧ K`,
       action: pushRemote,
       disabled: !repository || Boolean(remoteTask),
     },
@@ -3189,6 +3190,7 @@ export function App() {
     autoSave: autoSaveAll,
     filesChanged,
     commitPanel: showCommitPanel,
+    push: pushRemote,
     gitRefresh: () => void refreshGit(null),
     addToVcs: addCurrentToVcs,
   };
@@ -3406,6 +3408,10 @@ export function App() {
         // 当前文件加入版本控制，与 GoLand 的 ⌥⌘A 一致。
         event.preventDefault();
         operations.current.addToVcs();
+      } else if (key === 'k' && event.shiftKey && !event.altKey) {
+        // 打开推送确认框，与 GoLand 的 ⌘⇧K 一致；实际推送仍需确认。
+        event.preventDefault();
+        operations.current.push();
       } else if (key === 'k' && !event.shiftKey) {
         // 打开提交面板，与 GoLand 的 ⌘K 一致。
         event.preventDefault();

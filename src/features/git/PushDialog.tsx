@@ -184,45 +184,57 @@ export function PushDialog({ projectId, onPush, onClose }: Props) {
       return <p className="push-note error">{detail}</p>;
     return (
       <>
-        <pre className="push-message">{detail.message}</pre>
-        <p className="push-meta">
-          {detail.author} · {fullTime(detail.time)} · {detail.hash.slice(0, 12)}
-          {detail.parents.length > 1 && ' · 合并提交，与第一个父提交比较'}
-        </p>
-        {!detail.files.length && (
-          <p className="push-note">此提交未改动项目目录内的文件。</p>
-        )}
-        {detail.files.map((file) => {
-          const style = changeStyle[file.kind];
-          return (
-            <div key={file.path} className="change-row">
-              <button
-                className={`change-name git-${file.kind}`}
-                title={`${file.original ? `${file.original} → ` : ''}${file.path} · ${style.label}，点击查看 Diff`}
-                onClick={() => void openFile(commit, file)}
-              >
-                <span className="change-file">{baseName(file.path)}</span>
-                {dirName(file.path) && (
-                  <span className="change-dir">{dirName(file.path)}</span>
-                )}
-                {file.original && (
-                  <span className="change-dir">
-                    ← {baseName(file.original)}
-                  </span>
-                )}
-              </button>
-              <span
-                className={`change-letter git-${file.kind}`}
-                title={style.label}
-              >
-                {style.letter}
-              </span>
-            </div>
-          );
-        })}
-        {detail.truncated && (
-          <p className="push-note">变更文件过多，只显示前 5,000 个。</p>
-        )}
+        <section className="push-description" aria-label="提交说明">
+          <div className="push-section-heading">提交说明</div>
+          <pre className="push-message" tabIndex={0} aria-label="提交说明内容">
+            {detail.message}
+          </pre>
+          <p className="push-meta">
+            {detail.author} · {fullTime(detail.time)} ·{' '}
+            {detail.hash.slice(0, 12)}
+            {detail.parents.length > 1 && ' · 合并提交，与第一个父提交比较'}
+          </p>
+        </section>
+        <div className="push-file-list" aria-label="提交中的文件">
+          <div className="push-section-heading">
+            变更文件 · {detail.files.length}
+            {detail.truncated ? '+' : ''}
+          </div>
+          {!detail.files.length && (
+            <p className="push-note">此提交未改动项目目录内的文件。</p>
+          )}
+          {detail.files.map((file) => {
+            const style = changeStyle[file.kind];
+            return (
+              <div key={file.path} className="change-row">
+                <button
+                  className={`change-name git-${file.kind}`}
+                  title={`${file.original ? `${file.original} → ` : ''}${file.path} · ${style.label}，点击查看 Diff`}
+                  onClick={() => void openFile(commit, file)}
+                >
+                  <span className="change-file">{baseName(file.path)}</span>
+                  {dirName(file.path) && (
+                    <span className="change-dir">{dirName(file.path)}</span>
+                  )}
+                  {file.original && (
+                    <span className="change-dir">
+                      ← {baseName(file.original)}
+                    </span>
+                  )}
+                </button>
+                <span
+                  className={`change-letter git-${file.kind}`}
+                  title={style.label}
+                >
+                  {style.letter}
+                </span>
+              </div>
+            );
+          })}
+          {detail.truncated && (
+            <p className="push-note">变更文件过多，只显示前 5,000 个。</p>
+          )}
+        </div>
       </>
     );
   }
@@ -326,7 +338,7 @@ export function PushDialog({ projectId, onPush, onClose }: Props) {
               </p>
             )}
           </div>
-          <div className="push-files" aria-label="提交中的文件">
+          <div className="push-files" aria-label="提交详情">
             {filesView()}
           </div>
         </div>
