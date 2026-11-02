@@ -107,14 +107,16 @@ export function SearchPanel({ projectId, focus, onOpen }: Props) {
     }
   }
 
-  // 输入或选项变化后延迟搜索；新的搜索会让后台停止旧的。
+  // 输入变化时立即作废并停止旧请求，避免它在等待新搜索期间回填结果。
   useEffect(() => {
+    request.current++;
+    void backend.cancelSearch().catch(() => {});
     if (timer.current !== null) window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => {
       timer.current = null;
       void run(query, options);
     }, SEARCH_DELAY);
-  }, [query, options]);
+  }, [query, options, projectId]);
 
   function stop() {
     request.current++;

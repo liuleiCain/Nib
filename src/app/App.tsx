@@ -316,6 +316,7 @@ export function App() {
   const [opening, setOpening] = useState<string | null>(null);
   const [recent, setRecent] = useState<RecentProject[]>([]);
   const [projectMenu, setProjectMenu] = useState(false);
+  const choosingProject = useRef(false);
   const restoring = useRef(false);
   const started = useRef(false);
   const [autoSave, setAutoSave] = useState(true);
@@ -461,6 +462,12 @@ export function App() {
   /** 保存标签；自动保存不弹成功提示，失败后暂停该标签的自动保存直到手动保存或重新加载。 */
   async function saveTab(tab: Tab, auto = false): Promise<boolean> {
     if (conflictRef.current?.tab === tab) return false;
+    // 输入法候选尚未确认时不写入拼音中间态，结束后由下一次自动保存重试。
+    const view = viewRef.current;
+    if (auto && view?.state === tab.state && view.compositionStarted) {
+      scheduleAutoSave();
+      return false;
+    }
     const existing = saves.current.get(tab.path);
     if (existing) return existing;
     const workspace = projectRef.current;
@@ -2378,17 +2385,28 @@ export function App() {
   }
 
   async function openProject() {
-    if (!desktop || busyRef.current || promptRef.current) return;
+    if (
+      !desktop ||
+      busyRef.current ||
+      promptRef.current ||
+      choosingProject.current
+    )
+      return;
+    // 原生选择器返回前拒绝重复打开，避免多个异步请求争用同一个系统面板。
+    choosingProject.current = true;
     setProjectMenu(false);
-    const path = await open({
-      directory: true,
-      multiple: false,
-      title: '选择 Nib 项目文件夹',
-    }).catch((error) => {
+    try {
+      const path = await open({
+        directory: true,
+        multiple: false,
+        title: '选择 Nib 项目文件夹',
+      });
+      if (typeof path === 'string') await openRecent(path);
+    } catch (error) {
       notify(errorMessage(error));
-      return null;
-    });
-    if (typeof path === 'string') await openRecent(path);
+    } finally {
+      choosingProject.current = false;
+    }
   }
 
   async function closeProject() {

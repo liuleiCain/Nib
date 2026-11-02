@@ -162,7 +162,9 @@ export function QuickOpen({ projectId, recent, onOpen, onClose }: Props) {
             input.current?.focus();
           } else if (event.key === 'ArrowDown') {
             event.preventDefault();
-            setIndex((value) => Math.min(results.length - 1, value + 1));
+            setIndex((value) =>
+              Math.max(0, Math.min(results.length - 1, value + 1)),
+            );
           } else if (event.key === 'ArrowUp') {
             event.preventDefault();
             setIndex((value) => Math.max(0, value - 1));

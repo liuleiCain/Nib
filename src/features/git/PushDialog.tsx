@@ -96,7 +96,10 @@ export function PushDialog({ projectId, onPush, onClose }: Props) {
   const target = data
     ? (data.upstream ?? `${data.remote}/${data.branch}`)
     : null;
-  const ready = Boolean(data?.total);
+  // 发布新分支或设置上游时，即使远程已有全部提交也需要允许推送。
+  const ready = Boolean(
+    data && (data.total || data.newBranch || !data.upstream),
+  );
 
   /** 在右侧读取并显示文件在该提交中的 Diff（与第一个父提交比较）。 */
   async function openFile(item: CommitSummary, file: CommitFile) {
@@ -307,7 +310,11 @@ export function PushDialog({ projectId, onPush, onClose }: Props) {
             {error && <p className="push-note error">{error}</p>}
             {data && !data.total && (
               <p className="push-note">
-                没有需要推送的提交，{target} 已包含当前分支的所有提交。
+                {data.newBranch
+                  ? `没有额外的新提交，推送将发布当前分支到 ${target}。`
+                  : !data.upstream
+                    ? `没有需要推送的新提交，推送后将 ${target} 设为上游。`
+                    : `没有需要推送的提交，${target} 已包含当前分支的所有提交。`}
               </p>
             )}
             {data?.commits.map((item) => (
@@ -363,7 +370,7 @@ export function PushDialog({ projectId, onPush, onClose }: Props) {
               data && onPush(data.upstream ? null : data.remote, data.head)
             }
           >
-            推送{data?.total ? ` ${data.total} 个提交` : ''}
+            推送{data?.total ? ` ${data.total} 个提交` : ready ? '分支' : ''}
           </button>
         </div>
       </div>
