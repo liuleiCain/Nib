@@ -9,7 +9,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{
+    event::{MetadataKind, ModifyKind},
+    EventKind, RecommendedWatcher, RecursiveMode, Watcher,
+};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, EventTarget};
 
@@ -92,6 +95,16 @@ fn forward(
         };
         match message {
             Ok(Ok(event)) => {
+                // 读取 Diff、Git 扫描产生的访问事件不代表内容变化，避免自动跟随被自身读取反复触发。
+                if !event.need_rescan()
+                    && matches!(
+                        event.kind,
+                        EventKind::Access(_)
+                            | EventKind::Modify(ModifyKind::Metadata(MetadataKind::AccessTime))
+                    )
+                {
+                    continue;
+                }
                 rescan |= event.need_rescan();
                 for path in &event.paths {
                     if let Some(relative) = relative(&root, path) {

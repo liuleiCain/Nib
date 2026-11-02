@@ -74,6 +74,7 @@ pub fn run() {
             commands::save_expanded,
             commands::cancel_quit,
             commands::list_directory,
+            commands::inspect_files,
             commands::read_file,
             commands::save_file,
             commands::git_status,

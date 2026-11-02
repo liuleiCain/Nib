@@ -294,7 +294,7 @@ export interface FontFamily {
 }
 
 /** 侧边栏面板。 */
-export type SidebarPanel = 'files' | 'commit' | 'log' | 'search';
+export type SidebarPanel = 'files' | 'commit' | 'log' | 'search' | 'live';
 
 /** 侧边栏是否显示及当前面板。 */
 export interface View {
@@ -348,6 +348,8 @@ export const backend = {
     invoke<Directory>('list_directory', { projectId, path }),
   readFile: (projectId: number, path: string) =>
     invoke<Document>('read_file', { projectId, path }),
+  inspectFiles: (projectId: number, paths: string[]) =>
+    invoke<FileChange[]>('inspect_files', { projectId, paths }),
   saveFile: (
     projectId: number,
     path: string,

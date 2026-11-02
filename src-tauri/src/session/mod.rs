@@ -24,7 +24,7 @@ const MAX_EXPANDED: usize = 200;
 /// 侧边栏宽度范围，与界面拖动范围一致。
 const SIDEBAR_WIDTH: (u32, u32) = (180, 420);
 /// 可记录的侧边栏面板。
-const PANELS: [&str; 4] = ["files", "commit", "log", "search"];
+const PANELS: [&str; 5] = ["files", "commit", "log", "search", "live"];
 
 /// 最近项目、各项目标签和退出时打开的项目，与项目文件分开存放在用户目录的 `.nib` 下。
 pub struct SessionStore {

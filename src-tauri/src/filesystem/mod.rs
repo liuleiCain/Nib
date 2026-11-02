@@ -19,6 +19,47 @@ const PREVIEW_BYTES: u64 = 5 * 1024 * 1024;
 const SNIFF_BYTES: u64 = 8 * 1024;
 const MAX_DIRECTORY_ENTRIES: usize = 10_000;
 
+/// 非 Git 项目的变化路径状态；仅检查元数据，不读取文件内容。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangedFile {
+    pub path: String,
+    pub original: Option<String>,
+    pub kind: &'static str,
+    pub submodule: bool,
+}
+
+/// 过滤目录和项目外路径，消失的文件保留为删除状态供实时面板展示。
+pub fn inspect_files(
+    state: &WorkspaceState,
+    id: u64,
+    paths: &[String],
+) -> AppResult<Vec<ChangedFile>> {
+    let workspace = state.lock()?;
+    workspace.root_text(id)?;
+    let mut files = Vec::new();
+    for path in paths.iter().take(500) {
+        let kind = match workspace.entry(id, path) {
+            Ok(entry) => match fs::symlink_metadata(&entry) {
+                Ok(metadata) if metadata.is_file() => "modified",
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => "deleted",
+                Err(error) => return Err(error.into()),
+            },
+            // 父目录消失时，前端只将之前确认过的文件纳入删除列表。
+            Err(error) if error.code == "NOT_FOUND" => "deleted",
+            Err(error) => return Err(error),
+        };
+        files.push(ChangedFile {
+            path: path.clone(),
+            original: None,
+            kind,
+            submodule: false,
+        });
+    }
+    Ok(files)
+}
+
 /// 文件树的一层条目，路径始终相对工作区。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -32,6 +32,7 @@ import {
   LoaderCircle,
   PanelLeft,
   PenLine,
+  Radio,
   RotateCw,
   Save,
   Search,
@@ -99,6 +100,8 @@ import {
 } from '../features/settings/SettingsDialog';
 import { setHeadDoc } from '../features/git/changes';
 import { Text } from '@codemirror/state';
+import { LiveChangesPanel } from '../features/changes/LiveChangesPanel';
+import { useLiveChanges } from '../features/changes/useLiveChanges';
 
 type Decision = 'save' | 'discard' | 'cancel';
 /**
@@ -259,6 +262,7 @@ const DEFAULT_EDITOR_FONT =
 const GIT_REFRESH_DELAY = 400;
 /** Diff 标签的标识前缀，与文件标签共用一个标签栏；文件路径不会含 NUL，不会与文件标签冲突。 */
 const DIFF_PREFIX = '\0diff/';
+const LIVE_TAB = '\0live';
 
 /** 主窗口协调工作区、编辑状态和用户确认，磁盘操作统一交给后台。 */
 export function App() {
@@ -329,6 +333,7 @@ export function App() {
   const paletteRef = useRef<HTMLInputElement>(null);
   // Git：侧边栏视图、仓库状态、勾选的文件、提交信息与 Diff 标签。
   const [panel, setPanel] = useState<SidebarPanel>('files');
+  const [liveOpen, setLiveOpen] = useState(false);
   // 提交面板按目录分组显示。
   const [changeTree, setChangeTree] = useState(false);
   // 当前项目文件树展开的目录，随项目恢复。
@@ -386,6 +391,7 @@ export function App() {
     : undefined;
   const dirtyCount = tabs.filter(isDirty).length;
   const repository = git?.kind === 'repository' ? git : null;
+  const live = useLiveChanges(project, git, active === LIVE_TAB);
   const gitKinds = new Map<string, ChangeKind>(
     repository?.files.map((file) => [file.path, file.kind]) ?? [],
   );
@@ -652,6 +658,7 @@ export function App() {
   function filesChanged(changes: FileChanges) {
     const workspace = projectRef.current;
     if (!workspace || changes.projectId !== workspace.id) return;
+    void live.record(changes);
     if (changes.rescan || changes.paths.length)
       setTreeChanges((previous) => ({
         key: previous.key + 1,
@@ -719,7 +726,8 @@ export function App() {
       changed === null || pendingGitPaths.current === null
         ? null
         : [...pendingGitPaths.current, ...changed];
-    if (gitTimer.current !== null) window.clearTimeout(gitTimer.current);
+    // 持续写入时也定期刷新，避免尾部防抖一直推迟变更列表的更新。
+    if (gitTimer.current !== null) return;
     gitTimer.current = window.setTimeout(() => {
       gitTimer.current = null;
       const paths = pendingGitPaths.current;
@@ -2200,7 +2208,7 @@ export function App() {
       .saveTabs(
         workspace.id,
         tabsRef.current.map((tab) => tab.path),
-        activeRef.current?.startsWith(DIFF_PREFIX) ? null : activeRef.current,
+        activeRef.current?.startsWith('\0') ? null : activeRef.current,
       )
       .catch((error) => {
         if (projectRef.current?.id === workspace.id)
@@ -2246,6 +2254,7 @@ export function App() {
 
   /** 切换或关闭项目时清空上一个项目的 Git 状态和 Diff 标签。 */
   function resetGit() {
+    setLiveOpen(false);
     gitRequest.current++;
     if (gitTimer.current !== null) window.clearTimeout(gitTimer.current);
     gitTimer.current = null;
@@ -2757,6 +2766,28 @@ export function App() {
     }));
   }
 
+  /** 实时观察复用一个主区标签，不为每次变化创建文件标签。 */
+  function showLiveChanges() {
+    if (!projectRef.current || busyRef.current || promptRef.current) return;
+    desiredFile.current = null;
+    setOpening(null);
+    setSidebar(true);
+    setPanel('live');
+    setLiveOpen(true);
+    activate(LIVE_TAB);
+  }
+
+  function closeLiveChanges() {
+    setLiveOpen(false);
+    if (activeRef.current === LIVE_TAB)
+      activate(
+        tabsRef.current.at(-1)?.path ??
+          (diffsRef.current.length
+            ? DIFF_PREFIX + diffsRef.current.at(-1)!.key
+            : null),
+      );
+  }
+
   function showPalette() {
     setQuery('');
     setCommandIndex(0);
@@ -2812,6 +2843,12 @@ export function App() {
         setSidebar(true);
         setPanel('files');
       },
+      disabled: !project,
+    },
+    {
+      label: '实时变更',
+      detail: '实时观察文件与 Diff',
+      action: showLiveChanges,
       disabled: !project,
     },
     {
@@ -3056,6 +3093,10 @@ export function App() {
     },
     close: () => {
       const current = activeRef.current;
+      if (current === LIVE_TAB) {
+        closeLiveChanges();
+        return;
+      }
       if (current?.startsWith(DIFF_PREFIX)) {
         closeDiff(current.slice(DIFF_PREFIX.length));
         return;
@@ -3545,6 +3586,17 @@ export function App() {
                   </button>
                   <button
                     role="tab"
+                    aria-selected={panel === 'live'}
+                    className={panel === 'live' ? 'active' : ''}
+                    onClick={showLiveChanges}
+                    disabled={!project}
+                    aria-label="实时变更"
+                    title="实时变更 · 观察外部工具的文件修改"
+                  >
+                    <Radio size={14} />
+                  </button>
+                  <button
+                    role="tab"
                     aria-selected={panel === 'search'}
                     aria-label="搜索"
                     className={panel === 'search' ? 'active' : ''}
@@ -3625,6 +3677,33 @@ export function App() {
                   onContinue={() => void continueOperation()}
                   onSkip={() => void skipCommit()}
                   onAbort={() => void abortOperation()}
+                />
+              ) : project && panel === 'live' ? (
+                <LiveChangesPanel
+                  files={live.files}
+                  selected={live.selected}
+                  following={live.following}
+                  status={git}
+                  loading={gitLoading}
+                  error={gitError}
+                  rescan={live.rescan}
+                  onSelect={(path) => {
+                    if (idle()) {
+                      live.select(path);
+                      showLiveChanges();
+                    }
+                  }}
+                  onFollow={live.follow}
+                  onPause={live.pause}
+                  onRefresh={() => {
+                    void live.record({
+                      projectId: project.id,
+                      paths: [],
+                      rescan: true,
+                      git: false,
+                    });
+                    void refreshGit(null);
+                  }}
                 />
               ) : project && panel === 'log' ? (
                 repository ? (
@@ -3844,7 +3923,34 @@ export function App() {
                   </button>
                 </div>
               ))}
-              {!tabs.length && !diffs.length && (
+              {liveOpen && project && (
+                <div
+                  className={`tab live-tab ${active === LIVE_TAB ? 'active' : ''}`}
+                >
+                  <button
+                    role="tab"
+                    aria-selected={active === LIVE_TAB}
+                    onClick={showLiveChanges}
+                    onMouseDown={(event) => {
+                      if (event.button === 1) {
+                        event.preventDefault();
+                        closeLiveChanges();
+                      }
+                    }}
+                  >
+                    <Radio size={13} />
+                    <span>实时变更</span>
+                  </button>
+                  <button
+                    className="tab-close"
+                    aria-label="关闭实时变更"
+                    onClick={closeLiveChanges}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
+              {!tabs.length && !diffs.length && !liveOpen && (
                 <span className="tab-placeholder">工作区</span>
               )}
             </div>
@@ -3936,7 +4042,78 @@ export function App() {
                 />
               </div>
             )}
-            {!selected && !selectedDiff && (
+            {project && active === LIVE_TAB && (
+              <div className="diff-layer live-view">
+                <div className="live-view-heading">
+                  <Radio size={14} />
+                  <span
+                    className="live-view-path"
+                    title={live.displayed ?? undefined}
+                  >
+                    {live.displayed ?? '实时变更'}
+                  </span>
+                  {live.loading && (
+                    <LoaderCircle
+                      size={12}
+                      className="spin"
+                      aria-label="正在更新预览"
+                    />
+                  )}
+                  <span className="live-disk-label">
+                    {live.preview ? '磁盘预览' : 'HEAD → 当前磁盘'}
+                  </span>
+                  <button
+                    className={`secondary-button ${live.following ? 'active' : ''}`}
+                    aria-pressed={live.following}
+                    onClick={() =>
+                      live.following ? live.pause() : live.follow()
+                    }
+                    disabled={!live.files.length}
+                  >
+                    {live.following ? '正在跟随' : '回到最新'}
+                  </button>
+                </div>
+                {tabs.some(
+                  (tab) => tab.path === live.displayed && isDirty(tab),
+                ) && (
+                  <div className="live-unsaved">
+                    此文件有未保存的编辑，下面仅显示磁盘内容。
+                  </div>
+                )}
+                {live.diff ? (
+                  <DiffView
+                    diff={live.diff}
+                    unified={unified}
+                    onToggleUnified={() => setUnified((value) => !value)}
+                    onOpenFile={(path) => void openFile(path)}
+                    onRestore={() => {}}
+                    onRevert={async () => false}
+                    readOnly
+                    preview={live.preview}
+                    follow={live.following}
+                    onInteract={live.pause}
+                  />
+                ) : live.selected ? (
+                  <div className="diff-message">
+                    <LoaderCircle size={14} className="spin" /> 正在读取文件…
+                  </div>
+                ) : (
+                  <div className="live-waiting">
+                    <Radio size={34} strokeWidth={1.2} />
+                    <h2>等待文件变化</h2>
+                    <p>
+                      在外部 Agent 或编辑器中保存文件，变更会自动显示在这里。
+                    </p>
+                    <span>
+                      {live.preview
+                        ? '非 Git 项目显示最新内容'
+                        : '选择左侧文件查看差异，或开启跟随最新变化'}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+            {!selected && !selectedDiff && active !== LIVE_TAB && (
               <div className="welcome">
                 <div className="welcome-inner">
                   <div className="welcome-mark">

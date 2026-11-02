@@ -4,9 +4,11 @@ import {
   getChunks,
   goToNextChunk,
   goToPreviousChunk,
+  getOriginalDoc,
+  originalDocChangeEffect,
   unifiedMergeView,
 } from '@codemirror/merge';
-import { EditorState } from '@codemirror/state';
+import { ChangeSet, Compartment, EditorState } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
 import { EditorView, lineNumbers } from '@codemirror/view';
 import { syntaxHighlighting } from '@codemirror/language';
@@ -20,7 +22,12 @@ import {
   Undo2,
 } from 'lucide-react';
 import type { DiffSources, Side } from '../../lib/backend';
-import { editorHighlight, editorTheme, language } from '../editor/model';
+import {
+  diffChange,
+  editorHighlight,
+  editorTheme,
+  language,
+} from '../editor/model';
 
 /** 主区打开的一个 Diff 标签。 */
 export interface DiffTab {
@@ -31,7 +38,7 @@ export interface DiffTab {
   /** 数据加载完成前为空。 */
   sources: DiffSources | null;
   error: string | null;
-  /** 每次刷新递增，视图据此重建。 */
+  /** 每次读取递增，内容通过事务同步到现有视图。 */
   version: number;
   /** 提交中的历史变更（与第一个父提交比较）；为空时比较 HEAD 与工作区。 */
   commit: { hash: string; parent: string | null; subject: string } | null;
@@ -46,6 +53,12 @@ interface Props {
   onRestore: () => void;
   /** 回滚一处变更：before、after 为回滚前后的工作区全文，写入失败返回 false。 */
   onRevert: (before: string, after: string) => Promise<boolean>;
+  /** 实时观察时禁用所有写盘操作。 */
+  readOnly?: boolean;
+  /** 非 Git 项目仅展示最新内容，不将全文误标为新增。 */
+  preview?: boolean;
+  follow?: boolean;
+  onInteract?: () => void;
 }
 
 /** 大于该字符数时折叠未变化行、降低差异精度，避免长时间计算。 */
@@ -100,14 +113,22 @@ export function DiffView({
   onOpenFile,
   onRestore,
   onRevert,
+  readOnly = false,
+  preview = false,
+  follow = false,
+  onInteract,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
+  const syntax = useRef(new Compartment());
+  const editors = useRef<EditorView[]>([]);
   const navigate = useRef<((direction: 1 | -1) => void) | null>(null);
   const revertRef = useRef(onRevert);
   revertRef.current = onRevert;
   // 回滚后会按新内容重建视图，记住滚动位置避免跳回顶部。
   const scroll = useRef<{ key: string; top: number } | null>(null);
   const [count, setCount] = useState(0);
+  const [lines, setLines] = useState({ added: 0, removed: 0 });
+  const synchronize = useRef<(() => void) | null>(null);
   // 回滚写入失败时递增，按原内容重建视图。
   const [reset, setReset] = useState(0);
   const sources = diff.sources;
@@ -116,128 +137,254 @@ export function DiffView({
     sources?.current.kind === 'text' ? sources.current.content : '';
   // 一侧为二进制、超限或不支持时不显示文本对比，避免误导；新增、删除时空的一侧按空文本比较。
   const notice = sources
-    ? (sideLabel(sources.current) ?? sideLabel(sources.base))
+    ? preview && sources.current.kind === 'missing'
+      ? '文件已从磁盘删除。'
+      : (sideLabel(sources.current) ?? sideLabel(sources.base))
     : null;
-  const comparable = Boolean(sources) && !notice;
+  const comparable = Boolean(sources) && !notice && !diff.error;
   // 历史提交只读；文件已删除时没有可写入的工作区文件，不提供回滚。
-  const revertible = !diff.commit && sources?.current.kind === 'text';
+  const revertible =
+    !readOnly && !diff.commit && sources?.current.kind === 'text';
   const commit = diff.commit;
+  const large = base.length + current.length > LARGE;
+  const content = useRef({ base, current, follow, path: diff.path });
+  content.current = { base, current, follow, path: diff.path };
 
   useLayoutEffect(() => {
     const parent = host.current;
     if (!parent || !comparable) return;
     let disposed = false;
     let cleanup = () => {};
-    void (async () => {
-      const syntax = await language(diff.path);
-      if (disposed) return;
-      const large = base.length + current.length > LARGE;
-      const shared: Extension[] = [
-        lineNumbers(),
-        EditorView.editable.of(false),
-        EditorState.readOnly.of(true),
-        editorTheme,
-        syntaxHighlighting(editorHighlight),
-        large ? [] : syntax,
-        EditorState.tabSize.of(4),
-      ];
-      const scrollKey = `${diff.path}:${unified}`;
-      let chunkCount = () => 0;
-      // 视图先显示回滚结果，写入失败或被拒绝时重建为原内容。
-      const revertListener = EditorView.updateListener.of((update) => {
-        if (!update.transactions.some((tr) => tr.isUserEvent('revert'))) return;
-        setCount(chunkCount());
-        void revertRef
-          .current(
-            update.startState.doc.toString(),
-            update.state.doc.toString(),
-          )
-          .then((saved) => {
-            if (!saved && !disposed) setReset((value) => value + 1);
-          });
+    const shared: Extension[] = [
+      lineNumbers(),
+      EditorView.editable.of(false),
+      EditorState.readOnly.of(true),
+      editorTheme,
+      syntaxHighlighting(editorHighlight),
+      syntax.current.of([]),
+      EditorState.tabSize.of(4),
+    ];
+    const scrollKey = `${diff.path}:${unified}:${preview}`;
+    let chunkCount = () => 0;
+    let chunks = () =>
+      [] as readonly {
+        fromA: number;
+        toA: number;
+        fromB: number;
+        toB: number;
+      }[];
+    // 视图先显示回滚结果，写入失败或被拒绝时重建为原内容。
+    const revertListener = EditorView.updateListener.of((update) => {
+      if (!update.transactions.some((tr) => tr.isUserEvent('revert'))) return;
+      setCount(chunkCount());
+      void revertRef
+        .current(update.startState.doc.toString(), update.state.doc.toString())
+        .then((saved) => {
+          if (!saved && !disposed) setReset((value) => value + 1);
+        });
+    });
+    const restore = (scroller: HTMLElement) => {
+      const saved = scroll.current;
+      if (saved?.key === scrollKey && !content.current.follow)
+        requestAnimationFrame(() => {
+          if (!disposed && !content.current.follow)
+            scroller.scrollTop = saved.top;
+        });
+    };
+    const collapse = { margin: 3, minSize: 8 };
+    const diffConfig = { scanLimit: large ? 200 : 2000, timeout: 1500 };
+    let left: EditorView | null = null;
+    let right: EditorView;
+    let scroller: HTMLElement;
+    if (unified || preview) {
+      const view = new EditorView({
+        parent,
+        state: EditorState.create({
+          doc: content.current.current,
+          extensions: [
+            shared,
+            revertListener,
+            preview
+              ? []
+              : unifiedMergeView({
+                  original: content.current.base,
+                  mergeControls: revertible ? chunkControl : false,
+                  gutter: true,
+                  syntaxHighlightDeletions: !large,
+                  collapseUnchanged: collapse,
+                  diffConfig,
+                }),
+          ],
+        }),
       });
-      const restore = (scroller: HTMLElement) => {
-        const saved = scroll.current;
-        if (saved?.key === scrollKey)
-          requestAnimationFrame(() => (scroller.scrollTop = saved.top));
+      chunkCount = () => getChunks(view.state)?.chunks.length ?? 0;
+      chunks = () => getChunks(view.state)?.chunks ?? [];
+      right = view;
+      scroller = view.scrollDOM;
+      setCount(chunkCount());
+      restore(view.scrollDOM);
+      navigate.current = (direction) => {
+        (direction > 0 ? goToNextChunk : goToPreviousChunk)(view);
+        view.focus();
       };
-      const collapse = { margin: 3, minSize: 8 };
-      const diffConfig = { scanLimit: large ? 200 : 2000, timeout: 1500 };
-      if (unified) {
-        const view = new EditorView({
-          parent,
-          state: EditorState.create({
-            doc: current,
-            extensions: [
-              shared,
-              revertListener,
-              unifiedMergeView({
-                original: base,
-                mergeControls: revertible ? chunkControl : false,
-                gutter: true,
-                syntaxHighlightDeletions: !large,
-                collapseUnchanged: collapse,
-                diffConfig,
-              }),
-            ],
+      cleanup = () => {
+        scroll.current = {
+          key: `${displayedPath}:${unified}:${preview}`,
+          top: view.scrollDOM.scrollTop,
+        };
+        view.destroy();
+      };
+    } else {
+      const view = new MergeView({
+        parent,
+        a: { doc: content.current.base, extensions: shared },
+        b: {
+          doc: content.current.current,
+          extensions: [shared, revertListener],
+        },
+        gutter: true,
+        revertControls: revertible ? 'a-to-b' : undefined,
+        renderRevertControl: revertButton,
+        collapseUnchanged: collapse,
+        diffConfig,
+      });
+      chunkCount = () => view.chunks.length;
+      chunks = () => view.chunks;
+      left = view.a;
+      right = view.b;
+      scroller = parent;
+      setCount(chunkCount());
+      restore(parent);
+      navigate.current = (direction) => {
+        (direction > 0 ? goToNextChunk : goToPreviousChunk)(view.b);
+        view.b.focus();
+      };
+      cleanup = () => {
+        scroll.current = {
+          key: `${displayedPath}:${unified}:${preview}`,
+          top: parent.scrollTop,
+        };
+        view.destroy();
+      };
+    }
+    editors.current = left ? [left, right] : [right];
+    let displayedPath = content.current.path;
+    let wasFollowing = false;
+    let lastPosition: number | null = null;
+    /** 按最小替换区间更新文本，保留选区；跟随时定位本次写入所在位置。 */
+    synchronize.current = () => {
+      const next = content.current;
+      const changedFile = displayedPath !== next.path;
+      displayedPath = next.path;
+      if (changedFile) lastPosition = null;
+      const top = scroller.scrollTop;
+      const leftDoc =
+        left?.state.doc ?? (preview ? null : getOriginalDoc(right.state));
+      const leftChange = leftDoc ? diffChange(leftDoc, next.base) : null;
+      const rightChange = diffChange(right.state.doc, next.current);
+      if (leftChange && left) left.dispatch({ changes: leftChange });
+      const effects =
+        leftChange && !left && !preview
+          ? originalDocChangeEffect(
+              right.state,
+              ChangeSet.of(leftChange, getOriginalDoc(right.state).length),
+            )
+          : null;
+      let changedPosition: number | null = null;
+      if (rightChange)
+        right.state
+          .changes(rightChange)
+          .iterChangedRanges((_fromA, _toA, fromB) => {
+            changedPosition = fromB;
+          });
+      if (rightChange || effects)
+        right.dispatch({
+          changes: rightChange ?? [],
+          effects: effects ?? [],
+        });
+      const updated = chunks();
+      lastPosition = changedPosition ?? lastPosition ?? updated[0]?.fromB ?? 0;
+      setCount(chunkCount());
+      const lineCount = (doc: EditorState['doc'], from: number, to: number) => {
+        const text = doc.sliceString(
+          Math.min(from, doc.length),
+          Math.min(to, doc.length),
+        );
+        return text
+          ? text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
+          : 0;
+      };
+      const originalDoc =
+        left?.state.doc ??
+        (preview ? right.state.doc : getOriginalDoc(right.state));
+      const nextLines = updated.reduce(
+        (total, chunk) => ({
+          added:
+            total.added + lineCount(right.state.doc, chunk.fromB, chunk.toB),
+          removed:
+            total.removed + lineCount(originalDoc, chunk.fromA, chunk.toA),
+        }),
+        { added: 0, removed: 0 },
+      );
+      setLines((previous) =>
+        previous.added === nextLines.added &&
+        previous.removed === nextLines.removed
+          ? previous
+          : nextLines,
+      );
+      if (
+        next.follow &&
+        (changedFile || rightChange || leftChange || !wasFollowing)
+      ) {
+        const position = Math.min(lastPosition, right.state.doc.length);
+        right.dispatch({
+          effects: EditorView.scrollIntoView(position, {
+            y: changedFile || !wasFollowing ? 'center' : 'nearest',
           }),
         });
-        chunkCount = () => getChunks(view.state)?.chunks.length ?? 0;
-        setCount(chunkCount());
-        restore(view.scrollDOM);
-        navigate.current = (direction) => {
-          (direction > 0 ? goToNextChunk : goToPreviousChunk)(view);
-          view.focus();
-        };
-        cleanup = () => {
-          scroll.current = { key: scrollKey, top: view.scrollDOM.scrollTop };
-          view.destroy();
-        };
-      } else {
-        const view = new MergeView({
-          parent,
-          a: { doc: base, extensions: shared },
-          b: { doc: current, extensions: [shared, revertListener] },
-          gutter: true,
-          revertControls: revertible ? 'a-to-b' : undefined,
-          renderRevertControl: revertButton,
-          collapseUnchanged: collapse,
-          diffConfig,
-        });
-        chunkCount = () => view.chunks.length;
-        setCount(chunkCount());
-        restore(parent);
-        navigate.current = (direction) => {
-          (direction > 0 ? goToNextChunk : goToPreviousChunk)(view.b);
-          view.b.focus();
-        };
-        cleanup = () => {
-          scroll.current = { key: scrollKey, top: parent.scrollTop };
-          view.destroy();
-        };
-      }
-    })();
+      } else if (changedFile) {
+        right.dispatch({ selection: { anchor: 0 } });
+        if (left) left.dispatch({ selection: { anchor: 0 } });
+        scroller.scrollTop = 0;
+      } else if (rightChange || leftChange) scroller.scrollTop = top;
+      wasFollowing = next.follow;
+    };
+    synchronize.current();
     return () => {
       disposed = true;
       navigate.current = null;
+      synchronize.current = null;
+      editors.current = [];
       cleanup();
     };
-  }, [
-    diff.path,
-    diff.version,
-    reset,
-    unified,
-    comparable,
-    revertible,
-    base,
-    current,
-  ]);
+  }, [reset, unified, comparable, revertible, large, preview]);
 
+  // 路径变化只重配语言，不销毁代码视图；异步语言加载不得写入已切换的文件。
+  useEffect(() => {
+    if (!comparable || large) return;
+    let disposed = false;
+    void language(diff.path).then((extension) => {
+      if (disposed) return;
+      for (const view of editors.current)
+        view.dispatch({ effects: syntax.current.reconfigure(extension) });
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [diff.path, reset, unified, comparable, revertible, large, preview]);
+
+  useLayoutEffect(() => {
+    synchronize.current?.();
+  }, [base, current, diff.path, diff.version, follow]);
+
+  const interaction = useRef(onInteract);
+  interaction.current = onInteract;
   // F7 / Shift+F7 跳到下一处或上一处变更，与 GoLand 一致。
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       if (event.key !== 'F7') return;
       event.preventDefault();
+      interaction.current?.();
       navigate.current?.(event.shiftKey ? -1 : 1);
     };
     window.addEventListener('keydown', listener);
@@ -253,25 +400,37 @@ export function DiffView({
         <span className="diff-sides">
           <span>
             {added
-              ? '（新文件）'
+              ? preview
+                ? '最新磁盘内容'
+                : '（新文件）'
               : `${commit ? (commit.parent?.slice(0, 7) ?? '') : 'HEAD'}${diff.original ? ` · ${diff.original}` : ''}`}
           </span>
           <span title={commit?.subject}>
-            {deleted
-              ? '（已删除）'
-              : commit
-                ? `${commit.hash.slice(0, 7)} · ${commit.subject}`
-                : '工作区'}
+            {preview
+              ? diff.path
+              : deleted
+                ? '（已删除）'
+                : commit
+                  ? `${commit.hash.slice(0, 7)} · ${commit.subject}`
+                  : '工作区'}
           </span>
         </span>
-        {comparable && <span className="diff-count">{count} 处变更</span>}
+        {comparable && !preview && (
+          <span className="diff-count">
+            {count} 处变更 <span className="live-added">+{lines.added}</span>{' '}
+            <span className="live-removed">−{lines.removed}</span>
+          </span>
+        )}
         <span className="diff-actions">
           <button
             className="icon-button"
             title="上一处变更 (⇧F7)"
             aria-label="上一处变更"
-            disabled={!comparable}
-            onClick={() => navigate.current?.(-1)}
+            disabled={!comparable || preview}
+            onClick={() => {
+              onInteract?.();
+              navigate.current?.(-1);
+            }}
           >
             <ChevronUp size={15} />
           </button>
@@ -279,8 +438,11 @@ export function DiffView({
             className="icon-button"
             title="下一处变更 (F7)"
             aria-label="下一处变更"
-            disabled={!comparable}
-            onClick={() => navigate.current?.(1)}
+            disabled={!comparable || preview}
+            onClick={() => {
+              onInteract?.();
+              navigate.current?.(1);
+            }}
           >
             <ChevronDown size={15} />
           </button>
@@ -289,17 +451,20 @@ export function DiffView({
             title={unified ? '切换为左右对比' : '切换为统一视图'}
             aria-label={unified ? '切换为左右对比' : '切换为统一视图'}
             onClick={onToggleUnified}
+            disabled={preview}
           >
             {unified ? <Columns2 size={14} /> : <Rows2 size={14} />}
           </button>
           {commit ? null : deleted ? (
-            <button
-              className="secondary-button"
-              onClick={onRestore}
-              title="从 HEAD 恢复此文件"
-            >
-              <Undo2 size={13} /> 恢复文件
-            </button>
+            readOnly ? null : (
+              <button
+                className="secondary-button"
+                onClick={onRestore}
+                title="从 HEAD 恢复此文件"
+              >
+                <Undo2 size={13} /> 恢复文件
+              </button>
+            )
           ) : (
             <button
               className="secondary-button"
@@ -322,8 +487,24 @@ export function DiffView({
       ) : (
         <div
           ref={host}
-          key={`${diff.version}:${reset}:${unified}`}
-          className={`diff-host ${unified ? 'unified' : 'split'}`}
+          key={`${reset}:${unified}:${preview}:${revertible}:${large}`}
+          className={`diff-host ${unified || preview ? 'unified' : 'split'}`}
+          onWheel={onInteract}
+          onPointerDown={onInteract}
+          onKeyDown={(event) => {
+            if (
+              [
+                'ArrowUp',
+                'ArrowDown',
+                'PageUp',
+                'PageDown',
+                'Home',
+                'End',
+                'F7',
+              ].includes(event.key)
+            )
+              onInteract?.();
+          }}
         />
       )}
     </div>

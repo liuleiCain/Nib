@@ -204,7 +204,7 @@ kbd {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 14px 0 18px;
+  padding: 0 8px;
   border-bottom: 1px solid #ffffff04;
 }
 .sidebar-heading > span {
@@ -2492,4 +2492,245 @@ button.commit-branch svg:last-child {
   border-top: 1px solid #ffffff0d;
   color: #6d7b81;
   font-size: 10px;
+}
+
+/* 实时面板保留稳定的文件顺序，更新提示只短暂点亮当前行。 */
+.live-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.live-panel-heading,
+.live-panel-heading > span,
+.live-view-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.live-panel-heading {
+  justify-content: space-between;
+  padding: 10px 12px 4px;
+  font-size: 12px;
+  color: #c9d5d2;
+}
+.live-panel-heading svg,
+.live-tab svg,
+.live-view-heading > svg {
+  color: var(--accent);
+}
+.live-total {
+  color: #7f8b93;
+  font-size: 11px;
+}
+.live-options {
+  padding: 8px 12px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.live-options label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #b7c5c2;
+  cursor: pointer;
+}
+.live-follow-switch {
+  appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 30px;
+  height: 18px;
+  margin: 0;
+  border: 1px solid #64717b;
+  border-radius: 10px;
+  background: #384149;
+  cursor: pointer;
+}
+.live-follow-switch::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #d3dcda;
+}
+.live-follow-switch:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.live-follow-switch:checked::before {
+  transform: translateX(12px);
+  background: #182723;
+}
+.live-follow-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.live-options p,
+.live-warning {
+  margin: 8px 0 0;
+  font-size: 10px;
+  line-height: 1.6;
+  color: #7f8b93;
+}
+.live-warning {
+  padding: 0 12px 8px;
+  color: #d7b58f;
+  overflow-wrap: anywhere;
+}
+.live-file-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 5px 0;
+}
+.live-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  width: 100%;
+  padding: 9px 12px;
+  text-align: left;
+  border-left: 2px solid transparent;
+}
+.live-file:hover {
+  background: #ffffff05;
+}
+.live-file.selected {
+  background: #79b7a810;
+  border-left-color: var(--accent);
+}
+.live-file.recent {
+  background: #79b7a818;
+}
+.live-file > svg {
+  flex-shrink: 0;
+}
+.live-file-label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 3px;
+}
+.live-file-name,
+.live-file-directory,
+.live-view-path {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.live-file-name {
+  font-size: 12px;
+}
+.live-file-directory {
+  font-size: 10px;
+  color: #73818b;
+}
+.live-file-meta {
+  display: flex;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+}
+.live-file-meta time {
+  font-size: 9px;
+  color: #7f8b93;
+  font-variant-numeric: tabular-nums;
+}
+.live-update-dot {
+  position: absolute;
+  right: 4px;
+  top: 7px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.live-panel-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  color: #7f8b93;
+}
+.live-view {
+  display: flex;
+  flex-direction: column;
+}
+.live-view-heading {
+  min-height: 41px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.live-view-path {
+  flex: 1;
+  min-width: 0;
+  color: #c9d5d2;
+}
+.live-disk-label {
+  font-size: 10px;
+  color: #7f8b93;
+}
+.live-view-heading .secondary-button {
+  font-size: 11px;
+  padding: 5px 9px;
+}
+.live-view-heading .secondary-button.active {
+  color: var(--accent);
+  border-color: #79b7a845;
+}
+.live-view .diff-view {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+.live-unsaved {
+  padding: 8px 14px;
+  font-size: 11px;
+  color: #d7b58f;
+  background: #d7b58f08;
+}
+.live-waiting {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  padding: 24px;
+  text-align: center;
+  color: #7f8b93;
+}
+.live-waiting > svg {
+  color: var(--accent);
+  opacity: 0.7;
+}
+.live-waiting h2 {
+  color: #c9d5d2;
+  font-size: 16px;
+  font-weight: 500;
+  margin: 18px 0 4px;
+}
+.live-waiting p {
+  font-size: 12px;
+  line-height: 1.8;
+}
+.live-waiting > span {
+  font-size: 11px;
+  color: #66737c;
+}
+.live-added {
+  color: #6fc3c9;
+}
+.live-removed {
+  color: #e4aa7c;
 }

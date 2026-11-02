@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter, State, WebviewWindow};
 
 use crate::{
     error::{AppError, AppResult},
-    filesystem::{self, Directory, Document},
+    filesystem::{self, ChangedFile, Directory, Document},
     git::{
         self, Branches, CommitDetail, CommitResult, DiffSources, GitLocks, GitStatus, Integration,
         LogPage, Outgoing, PullResult, PushResult, Side,
@@ -247,6 +247,18 @@ pub async fn cancel_quit(
         sessions.retain_open(&workspaces.roots()?)
     })
     .await
+}
+
+#[tauri::command]
+/// 返回非 Git 项目中一批变化文件的当前状态，目录不纳入实时列表。
+pub async fn inspect_files(
+    workspaces: State<'_, Workspaces>,
+    window: WebviewWindow,
+    project_id: u64,
+    paths: Vec<String>,
+) -> AppResult<Vec<ChangedFile>> {
+    let state = workspaces.get(window.label())?;
+    blocking(move || filesystem::inspect_files(&state, project_id, &paths)).await
 }
 
 #[tauri::command]
