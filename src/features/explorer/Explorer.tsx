@@ -358,7 +358,9 @@ export function Explorer({
         return (
           <div className="tree-error">
             <span>{row.message}</span>
-            <button onClick={() => void load(row.path)}>重试</button>
+            <button title="重新读取此目录" onClick={() => void load(row.path)}>
+              重试
+            </button>
           </div>
         );
       case 'empty':

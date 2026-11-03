@@ -132,6 +132,7 @@ export function NameDialog({ request, onClose }: Props) {
         <div className="dialog-actions">
           <button
             className="secondary-button"
+            title="关闭对话框，不做修改"
             disabled={submitting}
             onClick={onClose}
           >
@@ -139,6 +140,7 @@ export function NameDialog({ request, onClose }: Props) {
           </button>
           <button
             className="primary-button"
+            title={`${request.confirm}（回车）`}
             disabled={submitting || !ready}
             onClick={() => void submit()}
           >

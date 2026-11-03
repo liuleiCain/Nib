@@ -139,6 +139,10 @@ const promptChoices: Record<
     save: string;
     discard: string;
     cancel: string;
+    /** 三个按钮的悬浮说明。 */
+    saveTip: string;
+    discardTip: string;
+    cancelTip: string;
   }
 > = {
   unsaved: {
@@ -147,6 +151,9 @@ const promptChoices: Record<
     save: '保存并继续',
     discard: '放弃修改',
     cancel: '返回编辑',
+    saveTip: '保存这些文件后继续',
+    discardTip: '丢弃这些未保存的修改后继续，无法恢复',
+    cancelTip: '不保存也不继续，回到编辑器',
   },
   recover: {
     title: '恢复上次未保存的内容？',
@@ -155,77 +162,91 @@ const promptChoices: Record<
     save: '恢复',
     discard: '放弃',
     cancel: '稍后处理',
+    saveTip: '把未保存的内容放回编辑器，可撤销',
+    discardTip: '删除这些恢复数据，无法找回',
+    cancelTip: '保留恢复数据，下次打开项目时再次提示',
   },
 };
 
 /** 单一操作确认框的文字。 */
 const confirmations: Record<
   Exclude<PromptKind, 'unsaved' | 'recover'>,
-  { title: string; description: string; confirm: string }
+  { title: string; description: string; confirm: string; tip: string }
 > = {
   restore: {
     title: '恢复已删除的文件？',
     description:
       '将从 HEAD 恢复以下文件（git checkout HEAD -- 路径），该文件的暂存状态也会恢复为 HEAD。不会覆盖任何现有文件。',
     confirm: '恢复文件',
+    tip: '从 HEAD 恢复列出的文件',
   },
   rollback: {
     title: '回滚以下变更？',
     description: '回滚后暂存区和工作区都恢复为 HEAD 版本。',
     confirm: '回滚',
+    tip: '丢弃列出文件的修改，恢复为 HEAD 版本',
   },
   delete: {
     title: '移到废纸篓？',
     description: '以下文件或目录将移到系统废纸篓，可从废纸篓找回。',
     confirm: '移到废纸篓',
+    tip: '把列出的条目移到系统废纸篓',
   },
   deleteBranch: {
     title: '删除本地分支？',
     description:
       '将删除以下本地分支（git branch -d），远程分支不受影响。分支有未合并的提交时会再次确认。',
     confirm: '删除分支',
+    tip: '删除列出的本地分支',
   },
   forceDeleteBranch: {
     title: '分支尚未合并，仍要删除？',
     description:
       '以下分支有尚未合并到当前分支或其上游的提交，强制删除（git branch -D）后这些提交只能通过 reflog 找回。',
     confirm: '强制删除',
+    tip: '强制删除未合并的分支，未合并的提交只能通过 reflog 找回',
   },
   deleteRemoteBranch: {
     title: '删除远程分支？',
     description:
       '将从远程仓库删除以下分支（git push <远程> --delete），其他人也将无法再获取它。此操作无法在 Nib 中撤销。',
     confirm: '删除远程分支',
+    tip: '从远程仓库删除列出的分支',
   },
   removeRemote: {
     title: '删除远程仓库？',
     description:
       '将删除以下远程仓库的配置（git remote remove）及本地记录的远程分支，跟踪它的本地分支会失去上游。远程服务器上的仓库不受影响，可重新添加。',
     confirm: '删除远程仓库',
+    tip: '删除本地的远程仓库配置，不影响远程服务器',
   },
   rebase: {
     title: '变基当前分支？',
     description:
       '当前分支中目标分支没有的提交将依次重放到目标分支之上，这些提交会被重写为新的提交。已推送过的提交变基后无法普通推送，Nib 不提供强制推送。',
     confirm: '变基',
+    tip: '把当前分支的提交重放到目标分支之上',
   },
   skipCommit: {
     title: '跳过这个提交？',
     description:
       '变基将跳过当前停下的提交（git rebase --skip），它的修改和已做的冲突解决都会丢弃，然后继续应用后面的提交。',
     confirm: '跳过提交',
+    tip: '丢弃当前提交的修改并继续变基',
   },
   abortOperation: {
     title: '中止进行中的操作？',
     description:
       '仓库将恢复到开始前的状态（git merge --abort / git rebase --abort），已做的冲突解决都会丢失。',
     confirm: '中止',
+    tip: '放弃进行中的操作，恢复到开始前的状态',
   },
   resolveMarkers: {
     title: '文件中仍有冲突标记，仍要标记为已解决？',
     description:
       '以下文件中还有 <<<<<<< … >>>>>>> 冲突标记。标记为已解决后，这些标记会作为文件内容提交。',
     confirm: '仍然标记',
+    tip: '连同冲突标记一起标记为已解决',
   },
 };
 /** 确认框中列出的是分支而不是文件。 */
@@ -3770,7 +3791,11 @@ export function App() {
             setProjectMenu((value) => !value);
           }}
           disabled={!desktop}
-          title={project ? project.root : '项目'}
+          title={
+            project
+              ? `${project.root}\n切换、打开或关闭项目`
+              : '打开文件夹或最近项目'
+          }
           aria-haspopup="dialog"
           aria-expanded={projectMenu}
         >
@@ -3779,7 +3804,11 @@ export function App() {
           <ChevronDown size={12} />
         </button>
         <div className="toolbar-center">
-          <button className="command-trigger" onClick={showPalette}>
+          <button
+            className="command-trigger"
+            title={`搜索并执行命令 (${mod}+Shift+P)`}
+            onClick={showPalette}
+          >
             <Search size={13} />
             <span>搜索命令…</span>
             <kbd>{mod} ⇧ P</kbd>
@@ -3821,7 +3850,7 @@ export function App() {
                     className={panel === 'files' ? 'active' : ''}
                     onClick={() => setPanel('files')}
                     aria-label="文件"
-                    title="文件"
+                    title="文件 · 浏览项目文件树"
                   >
                     <Files size={14} />
                   </button>
@@ -3832,7 +3861,7 @@ export function App() {
                     onClick={showCommitPanel}
                     disabled={!project}
                     aria-label="提交"
-                    title={`提交 (${mod}+K)`}
+                    title={`提交 · 查看变更并勾选提交 (${mod}+K)`}
                   >
                     <GitCommitHorizontal size={14} />
                     {Boolean(repository?.files.length) && (
@@ -4028,6 +4057,7 @@ export function App() {
                   <span>你的项目，触手可及。</span>
                   <button
                     className="secondary-button"
+                    title="选择本地文件夹作为项目"
                     onClick={() => void openProject()}
                     disabled={!desktop}
                   >
@@ -4216,6 +4246,7 @@ export function App() {
                   <button
                     role="tab"
                     aria-selected={active === LIVE_TAB}
+                    title="实时变更 · 查看外部工具对项目文件的修改"
                     onClick={showLiveChanges}
                     onMouseDown={(event) => {
                       if (event.button === 1) {
@@ -4254,7 +4285,7 @@ export function App() {
               {gitKinds.has(selected.path) && (
                 <button
                   className={`breadcrumb-git git-${gitKinds.get(selected.path)}`}
-                  title="查看变更"
+                  title="查看此文件相对 HEAD 的变更"
                   onClick={() => {
                     const change = repository?.files.find(
                       (file) => file.path === selected.path,
@@ -4281,6 +4312,7 @@ export function App() {
               {selected.paused && (
                 <button
                   className="secondary-button"
+                  title="对比磁盘上的新内容与未保存的编辑，手动合并后保存"
                   onClick={() => compareDisk(selected)}
                 >
                   <GitCompare size={12} /> 对比并处理
@@ -4336,6 +4368,11 @@ export function App() {
                   <button
                     className={`secondary-button ${live.following ? 'active' : ''}`}
                     aria-pressed={live.following}
+                    title={
+                      live.following
+                        ? '正在自动跳到最近变化的文件，点击暂停跟随'
+                        : '自动跳到最近变化的文件并定位修改位置'
+                    }
                     onClick={() =>
                       live.following ? live.pause() : live.follow()
                     }
@@ -4403,6 +4440,7 @@ export function App() {
                   </p>
                   <button
                     className="primary-button"
+                    title={`${project ? '在新的项目标签中打开文件夹' : '选择本地文件夹作为项目'} (${mod}+O)`}
                     onClick={() => void openProject()}
                     disabled={!desktop || Boolean(busy)}
                   >
@@ -4874,17 +4912,23 @@ function UnsavedDialog({
           <div className="dialog-actions">
             <button
               className="secondary-button"
+              title={promptChoices[kind].cancelTip}
               onClick={() => onDecide('cancel')}
             >
               {promptChoices[kind].cancel}
             </button>
             <button
               className="text-button danger"
+              title={promptChoices[kind].discardTip}
               onClick={() => onDecide('discard')}
             >
               {promptChoices[kind].discard}
             </button>
-            <button className="primary-button" onClick={() => onDecide('save')}>
+            <button
+              className="primary-button"
+              title={promptChoices[kind].saveTip}
+              onClick={() => onDecide('save')}
+            >
               {promptChoices[kind].save}
             </button>
           </div>
@@ -4892,6 +4936,7 @@ function UnsavedDialog({
           <div className="dialog-actions">
             <button
               className="secondary-button"
+              title="关闭对话框，不执行操作"
               onClick={() => onDecide('cancel')}
             >
               取消
@@ -4900,6 +4945,7 @@ function UnsavedDialog({
               className={
                 kind === 'restore' ? 'primary-button' : 'danger-button'
               }
+              title={confirmations[kind].tip}
               onClick={() => onDecide('save')}
             >
               {confirmations[kind].confirm}

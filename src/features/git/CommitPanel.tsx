@@ -211,7 +211,11 @@ export function CommitPanel({
         <TriangleAlert size={22} strokeWidth={1.3} />
         <p>无法读取 Git 状态</p>
         <span>{error}</span>
-        <button className="secondary-button" onClick={onRefresh}>
+        <button
+          className="secondary-button"
+          title="重新读取 Git 状态"
+          onClick={onRefresh}
+        >
           重试
         </button>
       </div>
@@ -373,6 +377,7 @@ export function CommitPanel({
     return (
       <button
         className="change-folder"
+        title={`${row.open ? '折叠' : '展开'}目录 ${row.label}`}
         style={{ paddingLeft: 10 + row.depth * 14 }}
         onClick={() => toggle(row.toggleKey)}
         onContextMenu={(event) => {
@@ -535,11 +540,19 @@ export function CommitPanel({
               {repository.operation === '合并' ? '完成合并' : '继续变基'}
             </button>
             {repository.operation === '变基' && (
-              <button className="secondary-button" onClick={onSkip}>
+              <button
+                className="secondary-button"
+                title="丢弃当前停下的提交及其冲突解决，继续变基"
+                onClick={onSkip}
+              >
                 跳过此提交
               </button>
             )}
-            <button className="text-button danger" onClick={onAbort}>
+            <button
+              className="text-button danger"
+              title={`放弃本次${repository.operation}，恢复到开始前的状态`}
+              onClick={onAbort}
+            >
               中止{repository.operation}
             </button>
           </div>

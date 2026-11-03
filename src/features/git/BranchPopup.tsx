@@ -422,6 +422,7 @@ export function BranchPopup({
       </label>
       <button
         role="menuitem"
+        title="从所有远程仓库获取最新的分支与提交，不改动工作区"
         disabled={remote}
         onClick={() => run({ kind: 'fetch' })}
       >
@@ -431,6 +432,7 @@ export function BranchPopup({
       </button>
       <button
         role="menuitem"
+        title="获取上游并快进当前分支；分叉时不合并"
         disabled={remote}
         onClick={() => run({ kind: 'pull' })}
       >
@@ -440,6 +442,7 @@ export function BranchPopup({
       </button>
       <button
         role="menuitem"
+        title="确认待推送的提交后推送当前分支"
         disabled={remote}
         onClick={() => run({ kind: 'push' })}
       >
@@ -449,6 +452,7 @@ export function BranchPopup({
       </button>
       <button
         role="menuitem"
+        title="以当前 HEAD 为起点新建分支并切换"
         onClick={() =>
           run({ kind: 'create', start: null, label: data?.current ?? null })
         }
@@ -522,6 +526,7 @@ export function BranchPopup({
             )}
             <button
               role="menuitem"
+              title="添加远程仓库的名称和地址，只修改本地配置"
               disabled={remote}
               onClick={() =>
                 run({

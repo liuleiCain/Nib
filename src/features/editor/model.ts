@@ -127,8 +127,61 @@ export function languageName(path: string): string {
   );
 }
 
-/** 编辑器与 Diff 视图共用的配色和主题。 */
-export { highlight as editorHighlight, theme as editorTheme };
+/** CodeMirror 内置界面（查找替换、折叠、合并视图）的中文文案。 */
+const phrases = EditorState.phrases.of({
+  Find: '查找',
+  Replace: '替换',
+  next: '下一个',
+  previous: '上一个',
+  all: '全部选中',
+  'match case': '区分大小写',
+  regexp: '正则',
+  'by word': '全词',
+  replace: '替换',
+  'replace all': '全部替换',
+  close: '关闭',
+  'current match': '当前匹配',
+  'on line': '位于第',
+  'replaced match on line $': '已替换第 $ 行的匹配',
+  'replaced $ matches': '已替换 $ 处匹配',
+  'Go to line': '跳转到行',
+  go: '跳转',
+  'Fold line': '折叠',
+  'Unfold line': '展开',
+  'folded code': '已折叠的代码',
+  unfold: '展开',
+  'Folded lines': '已折叠行',
+  'Unfolded lines': '已展开行',
+  to: '至',
+  '$ unchanged lines': '$ 行未变化',
+  'Revert this chunk': '回滚此处变更',
+  'Selection deleted': '已删除选中内容',
+});
+
+/** 查找面板按钮的悬浮说明，面板按钮由 CodeMirror 创建，挂载后补上 title。 */
+const searchTips: Record<string, string> = {
+  next: '跳到下一个匹配 (Enter)',
+  prev: '跳到上一个匹配 (Shift+Enter)',
+  select: '选中全部匹配',
+  replace: '替换当前匹配',
+  replaceAll: '替换全部匹配',
+  close: '关闭查找面板 (Esc)',
+};
+const searchPanelTips = EditorView.updateListener.of((update) => {
+  const panel = update.view.dom.querySelector('.cm-search');
+  if (!panel || panel.hasAttribute('data-tips')) return;
+  panel.setAttribute('data-tips', '');
+  panel
+    .querySelectorAll<HTMLButtonElement>('button[name]')
+    .forEach((button) => {
+      const tip = searchTips[button.name];
+      if (tip) button.title = tip;
+    });
+});
+
+/** 编辑器与 Diff 视图共用的配色和主题，包含中文界面文案。 */
+const sharedTheme: Extension = [theme, phrases];
+export { highlight as editorHighlight, sharedTheme as editorTheme };
 
 /** 按文件后缀按需加载语言支持。 */
 export async function language(path: string): Promise<Extension> {
@@ -171,7 +224,8 @@ export async function createTab(
     doc: document.content,
     extensions: [
       basicSetup,
-      theme,
+      sharedTheme,
+      searchPanelTips,
       syntaxHighlighting(highlight),
       syntax,
       keymap.of([indentWithTab]),

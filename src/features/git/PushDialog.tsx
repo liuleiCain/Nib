@@ -222,6 +222,7 @@ export function PushDialog({ projectId, onPush, onClose }: Props) {
         <div className="push-diff">
           <button
             className="text-button push-back"
+            title="关闭 Diff，回到变更文件列表"
             onClick={() => {
               diffRequest.current++;
               setDiff(null);
@@ -393,11 +394,16 @@ export function PushDialog({ projectId, onPush, onClose }: Props) {
           )}
         </p>
         <div className="dialog-actions">
-          <button className="secondary-button" onClick={onClose}>
+          <button
+            className="secondary-button"
+            title="关闭推送确认框，不推送"
+            onClick={onClose}
+          >
             取消
           </button>
           <button
             className="primary-button"
+            title="把上面列出的提交推送到远程分支"
             disabled={!ready}
             onClick={() =>
               data && onPush(data.upstream ? null : data.remote, data.head)

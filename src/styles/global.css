@@ -51,6 +51,23 @@ button:disabled {
   opacity: 0.35;
   cursor: default;
 }
+/* 全局悬浮提示，见 src/lib/tooltip.ts。 */
+.app-tooltip {
+  position: fixed;
+  z-index: 100;
+  max-width: 320px;
+  padding: 5px 8px;
+  color: var(--text);
+  background: #282e34;
+  border: 1px solid #40494f;
+  border-radius: 4px;
+  box-shadow: 0 6px 20px #0006;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
 button:focus-visible,
 [tabindex]:focus-visible {
   outline: 1px solid var(--accent);

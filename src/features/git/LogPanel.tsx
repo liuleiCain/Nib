@@ -344,6 +344,7 @@ export function LogPanel({
         {more && (
           <button
             className="log-more"
+            title="继续读取下一页（100 个）提交"
             disabled={loading}
             onClick={() => void load(false)}
           >

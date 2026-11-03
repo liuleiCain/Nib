@@ -289,6 +289,7 @@ export function ConflictDialog({
           <button
             className="secondary-button"
             data-close
+            title="不写入磁盘，保留右侧草稿回到编辑器"
             disabled={working}
             onClick={onClose}
           >
@@ -296,6 +297,7 @@ export function ConflictDialog({
           </button>
           <button
             className="secondary-button"
+            title="放弃草稿，标签改为磁盘上的最新内容"
             disabled={!disk || loading || working}
             onClick={() => void resolve(false)}
           >
@@ -303,6 +305,7 @@ export function ConflictDialog({
           </button>
           <button
             className="primary-button"
+            title="把右侧合并结果写入磁盘"
             disabled={!disk || loading || working}
             onClick={() => void resolve(true)}
           >

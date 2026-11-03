@@ -118,18 +118,26 @@ export function ProjectMenu({
         }}
       >
         <div className="menu-actions">
-          <button disabled={disabled} onClick={onChoose}>
+          <button
+            title="选择本地文件夹，在新的项目标签中打开"
+            disabled={disabled}
+            onClick={onChoose}
+          >
             <FolderOpen size={14} />
             <span>打开文件夹…</span>
             <kbd>{mod} O</kbd>
           </button>
-          <button onClick={onNewWindow}>
+          <button title="打开一个空白的项目标签" onClick={onNewWindow}>
             <AppWindow size={14} />
             <span>新建项目标签</span>
             <kbd>{mod} ⇧ N</kbd>
           </button>
           {project && (
-            <button disabled={disabled} onClick={onCloseProject}>
+            <button
+              title="关闭当前项目，回到欢迎页"
+              disabled={disabled}
+              onClick={onCloseProject}
+            >
               <FolderX size={14} />
               <span>关闭项目</span>
             </button>

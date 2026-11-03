@@ -243,6 +243,7 @@ export function SettingsDialog({ values, mod, onChange, onClose }: Props) {
               key={text}
               className={value === (index === 1) ? 'active' : ''}
               aria-pressed={value === (index === 1)}
+              title={`${label}：${text}`}
               onClick={() => onPick(index === 1)}
             >
               {text}
@@ -518,6 +519,7 @@ export function SettingsDialog({ values, mod, onChange, onClose }: Props) {
           <span>保存在 ~/.nib/settings.json，所有窗口共用</span>
           <button
             className="secondary-button"
+            title="把所有设置恢复为默认值"
             onClick={() => {
               setFontDraft(DEFAULT_SETTINGS.fontFamily);
               onChange(DEFAULT_SETTINGS);

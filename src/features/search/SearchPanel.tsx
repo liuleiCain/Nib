@@ -212,7 +212,11 @@ export function SearchPanel({ projectId, focus, onOpen }: Props) {
           <>
             <LoaderCircle size={12} className="spin" />
             <span>正在搜索…</span>
-            <button className="text-button" onClick={stop}>
+            <button
+              className="text-button"
+              title="停止正在进行的搜索 (Esc)"
+              onClick={stop}
+            >
               <CircleStop size={12} /> 停止
             </button>
           </>
