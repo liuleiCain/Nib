@@ -29,6 +29,7 @@ import {
   History,
   Keyboard,
   LoaderCircle,
+  LocateFixed,
   PanelLeft,
   PenLine,
   Radio,
@@ -3979,7 +3980,6 @@ export function App() {
                 <LiveChangesPanel
                   files={live.files}
                   selected={live.selected}
-                  following={live.following}
                   status={git}
                   loading={gitLoading}
                   error={gitError}
@@ -3990,8 +3990,6 @@ export function App() {
                       showLiveChanges();
                     }
                   }}
-                  onFollow={live.follow}
-                  onPause={live.pause}
                   onRefresh={() => {
                     void live.record({
                       projectId: project.id,
@@ -4366,19 +4364,12 @@ export function App() {
                     {live.preview ? '磁盘预览' : 'HEAD → 当前磁盘'}
                   </span>
                   <button
-                    className={`secondary-button ${live.following ? 'active' : ''}`}
-                    aria-pressed={live.following}
-                    title={
-                      live.following
-                        ? '正在自动跳到最近变化的文件，点击暂停跟随'
-                        : '自动跳到最近变化的文件并定位修改位置'
-                    }
-                    onClick={() =>
-                      live.following ? live.pause() : live.follow()
-                    }
-                    disabled={!live.files.length}
+                    className="secondary-button"
+                    title="打开最近变化的文件并定位到写入位置"
+                    onClick={live.jumpToLatest}
+                    disabled={!live.canJump}
                   >
-                    {live.following ? '正在跟随' : '回到最新'}
+                    <LocateFixed size={12} /> 跳到最新
                   </button>
                 </div>
                 {tabs.some(
@@ -4398,8 +4389,7 @@ export function App() {
                     onRevert={async () => false}
                     readOnly
                     preview={live.preview}
-                    follow={live.following}
-                    onInteract={live.pause}
+                    jump={live.jump}
                   />
                 ) : live.selected ? (
                   <div className="diff-message">
@@ -4415,7 +4405,7 @@ export function App() {
                     <span>
                       {live.preview
                         ? '非 Git 项目显示最新内容'
-                        : '选择左侧文件查看差异，或开启跟随最新变化'}
+                        : '选择左侧文件查看差异，或点「跳到最新」'}
                     </span>
                   </div>
                 )}

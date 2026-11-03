@@ -8,29 +8,23 @@ import { useVirtualRows } from '../../lib/virtual';
 interface Props {
   files: LiveFile[];
   selected: string | null;
-  following: boolean;
   status: GitStatus | null;
   loading: boolean;
   error: string | null;
   rescan: boolean;
   onSelect: (path: string) => void;
-  onFollow: () => void;
-  onPause: () => void;
   onRefresh: () => void;
 }
 
-/** 实时文件列表只展示当前状态，跟随与手动选择共用一个预览标签。 */
+/** 实时文件列表只展示当前状态，选择的文件在同一个预览标签中显示。 */
 export function LiveChangesPanel({
   files,
   selected,
-  following,
   status,
   loading,
   error,
   rescan,
   onSelect,
-  onFollow,
-  onPause,
   onRefresh,
 }: Props) {
   const [now, setNow] = useState(Date.now());
@@ -67,17 +61,6 @@ export function LiveChangesPanel({
         </button>
       </div>
       <div className="live-options">
-        <label>
-          <input
-            type="checkbox"
-            role="switch"
-            className="live-follow-switch"
-            aria-label="跟随最新变化"
-            checked={following}
-            onChange={() => (following ? onPause() : onFollow())}
-          />{' '}
-          跟随最新变化
-        </label>
         <p>
           {repository
             ? 'HEAD → 当前磁盘 · 包含已有未提交修改'

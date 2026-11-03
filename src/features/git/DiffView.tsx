@@ -57,8 +57,8 @@ interface Props {
   readOnly?: boolean;
   /** 非 Git 项目仅展示最新内容，不将全文误标为新增。 */
   preview?: boolean;
-  follow?: boolean;
-  onInteract?: () => void;
+  /** 实时变更的「跳到最新」：预览为该文件时定位最近写入的位置，每个 key 只执行一次。 */
+  jump?: { path: string; key: number } | null;
 }
 
 /** 大于该字符数时折叠未变化行、降低差异精度，避免长时间计算。 */
@@ -115,8 +115,7 @@ export function DiffView({
   onRevert,
   readOnly = false,
   preview = false,
-  follow = false,
-  onInteract,
+  jump = null,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const syntax = useRef(new Compartment());
@@ -147,8 +146,14 @@ export function DiffView({
     !readOnly && !diff.commit && sources?.current.kind === 'text';
   const commit = diff.commit;
   const large = base.length + current.length > LARGE;
-  const content = useRef({ base, current, follow, path: diff.path });
-  content.current = { base, current, follow, path: diff.path };
+  const content = useRef({ base, current, jump, path: diff.path });
+  content.current = { base, current, jump, path: diff.path };
+  // 已执行的跳转，视图重建（回滚、切换视图）后不再重复定位。
+  const jumped = useRef<number | null>(null);
+  const pendingJump = () => {
+    const next = content.current.jump;
+    return next !== null && next.key !== jumped.current;
+  };
 
   useLayoutEffect(() => {
     const parent = host.current;
@@ -185,10 +190,9 @@ export function DiffView({
     });
     const restore = (scroller: HTMLElement) => {
       const saved = scroll.current;
-      if (saved?.key === scrollKey && !content.current.follow)
+      if (saved?.key === scrollKey && !pendingJump())
         requestAnimationFrame(() => {
-          if (!disposed && !content.current.follow)
-            scroller.scrollTop = saved.top;
+          if (!disposed && !pendingJump()) scroller.scrollTop = saved.top;
         });
     };
     const collapse = { margin: 3, minSize: 8 };
@@ -269,9 +273,8 @@ export function DiffView({
     }
     editors.current = left ? [left, right] : [right];
     let displayedPath = content.current.path;
-    let wasFollowing = false;
     let lastPosition: number | null = null;
-    /** 按最小替换区间更新文本，保留选区；跟随时定位本次写入所在位置。 */
+    /** 按最小替换区间更新文本，保留选区；收到跳转请求时定位最近写入的位置。 */
     synchronize.current = () => {
       const next = content.current;
       const changedFile = displayedPath !== next.path;
@@ -332,22 +335,17 @@ export function DiffView({
           ? previous
           : nextLines,
       );
-      if (
-        next.follow &&
-        (changedFile || rightChange || leftChange || !wasFollowing)
-      ) {
+      if (next.jump && next.jump.path === next.path && pendingJump()) {
+        jumped.current = next.jump.key;
         const position = Math.min(lastPosition, right.state.doc.length);
         right.dispatch({
-          effects: EditorView.scrollIntoView(position, {
-            y: changedFile || !wasFollowing ? 'center' : 'nearest',
-          }),
+          effects: EditorView.scrollIntoView(position, { y: 'center' }),
         });
       } else if (changedFile) {
         right.dispatch({ selection: { anchor: 0 } });
         if (left) left.dispatch({ selection: { anchor: 0 } });
         scroller.scrollTop = 0;
       } else if (rightChange || leftChange) scroller.scrollTop = top;
-      wasFollowing = next.follow;
     };
     synchronize.current();
     return () => {
@@ -375,16 +373,13 @@ export function DiffView({
 
   useLayoutEffect(() => {
     synchronize.current?.();
-  }, [base, current, diff.path, diff.version, follow]);
+  }, [base, current, diff.path, diff.version, jump]);
 
-  const interaction = useRef(onInteract);
-  interaction.current = onInteract;
   // F7 / Shift+F7 跳到下一处或上一处变更，与 GoLand 一致。
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       if (event.key !== 'F7') return;
       event.preventDefault();
-      interaction.current?.();
       navigate.current?.(event.shiftKey ? -1 : 1);
     };
     window.addEventListener('keydown', listener);
@@ -427,10 +422,7 @@ export function DiffView({
             title="上一处变更 (⇧F7)"
             aria-label="上一处变更"
             disabled={!comparable || preview}
-            onClick={() => {
-              onInteract?.();
-              navigate.current?.(-1);
-            }}
+            onClick={() => navigate.current?.(-1)}
           >
             <ChevronUp size={15} />
           </button>
@@ -439,10 +431,7 @@ export function DiffView({
             title="下一处变更 (F7)"
             aria-label="下一处变更"
             disabled={!comparable || preview}
-            onClick={() => {
-              onInteract?.();
-              navigate.current?.(1);
-            }}
+            onClick={() => navigate.current?.(1)}
           >
             <ChevronDown size={15} />
           </button>
@@ -489,22 +478,6 @@ export function DiffView({
           ref={host}
           key={`${reset}:${unified}:${preview}:${revertible}:${large}`}
           className={`diff-host ${unified || preview ? 'unified' : 'split'}`}
-          onWheel={onInteract}
-          onPointerDown={onInteract}
-          onKeyDown={(event) => {
-            if (
-              [
-                'ArrowUp',
-                'ArrowDown',
-                'PageUp',
-                'PageDown',
-                'Home',
-                'End',
-                'F7',
-              ].includes(event.key)
-            )
-              onInteract?.();
-          }}
         />
       )}
     </div>

@@ -16,6 +16,12 @@ export interface LiveFile extends FileChange {
 
 const MAX_FILES = 5000;
 
+/** 一次「跳到最新」请求：预览加载到该文件后定位最近写入的位置，只执行一次。 */
+export interface LiveJump {
+  path: string;
+  key: number;
+}
+
 /** 当前项目的实时文件列表、选中文件和磁盘预览；项目切换后丢弃迟到结果。 */
 export function useLiveChanges(
   project: Project | null,
@@ -24,7 +30,7 @@ export function useLiveChanges(
 ) {
   const [observed, setObserved] = useState(new Map<string, LiveFile>());
   const [selected, setSelected] = useState<string | null>(null);
-  const [following, setFollowing] = useState(false);
+  const [jump, setJump] = useState<LiveJump | null>(null);
   const [diff, setDiff] = useState<DiffTab | null>(null);
   const [rescan, setRescan] = useState(false);
   const [refresh, setRefresh] = useState(0);
@@ -35,7 +41,7 @@ export function useLiveChanges(
   useEffect(() => {
     setObserved(new Map());
     setSelected(null);
-    setFollowing(false);
+    setJump(null);
     setDiff(null);
     setRescan(false);
   }, [project?.id]);
@@ -118,10 +124,8 @@ export function useLiveChanges(
   );
 
   useEffect(() => {
-    if (!visible) return;
-    if (following && latest) setSelected(latest.path);
-    else if (!selected && files.length) setSelected(files[0].path);
-  }, [visible, following, latest?.path, latest?.sequence, files, selected]);
+    if (visible && !selected && files.length) setSelected(files[0].path);
+  }, [visible, files, selected]);
 
   const file = files.find((entry) => entry.path === selected);
   const original = file?.original ?? null;
@@ -213,7 +217,9 @@ export function useLiveChanges(
   return {
     files,
     selected,
-    following,
+    /** 打开面板后观测到过变化时才能跳到最新。 */
+    canJump: Boolean(latest?.sequence),
+    jump,
     diff,
     displayed: diff?.path ?? selected,
     loading: selected !== null && diff?.path !== selected,
@@ -221,15 +227,18 @@ export function useLiveChanges(
     rescan,
     record,
     select(path: string) {
-      setFollowing(false);
+      // 手动选择后作废尚未执行的跳转，避免之后回到该文件时意外定位。
+      setJump(null);
       setSelected(path);
     },
-    pause() {
-      setFollowing(false);
-    },
-    follow() {
-      setFollowing(true);
-      if (latest) setSelected(latest.path);
+    /** 选中最近变化的文件并定位写入位置，之后不再自动切换。 */
+    jumpToLatest() {
+      if (!latest?.sequence) return;
+      setSelected(latest.path);
+      setJump((previous) => ({
+        path: latest.path,
+        key: (previous?.key ?? 0) + 1,
+      }));
     },
   };
 }
