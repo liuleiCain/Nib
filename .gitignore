@@ -5,3 +5,4 @@ src-tauri/target/
 .idea/
 *.tsbuildinfo
 *.local
+src-tauri/gen/

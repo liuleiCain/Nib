@@ -376,10 +376,6 @@ kbd {
   background: #819e91;
   flex-shrink: 0;
 }
-.phase-label {
-  margin-left: auto;
-  color: #53616a;
-}
 .editor-area {
   flex: 1;
   min-width: 0;

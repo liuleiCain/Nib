@@ -2473,7 +2473,7 @@ export function App() {
       return;
     }
     if (tabsRef.current.length + pendingFiles.current.size >= 30) {
-      notify('阶段一最多打开 30 个文件，请先关闭部分标签。');
+      notify('最多打开 30 个文件，请先关闭部分标签。');
       desiredFile.current = null;
       setOpening(null);
       return;
@@ -4054,7 +4054,6 @@ export function App() {
               <div className="sidebar-bottom">
                 <span className="version-dot" />
                 <span>Nib 0.1</span>
-                <span className="phase-label">阶段三</span>
               </div>
             </aside>
             <div

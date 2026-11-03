@@ -245,7 +245,7 @@ pub fn read(state: &WorkspaceState, id: u64, path: &str) -> AppResult<Document> 
     if mixed_newlines && !truncated {
         return Err(AppError::new(
             "MIXED_NEWLINES",
-            "文件含有混合换行符。为避免整文件变化，阶段一暂不编辑此文件。",
+            "文件含有混合换行符。为避免整文件变化，暂不编辑此文件。",
         ));
     }
     Ok(Document {
