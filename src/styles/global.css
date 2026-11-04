@@ -1437,6 +1437,15 @@ button.commit-branch svg:last-child {
   margin-top: 14px;
 }
 
+.diff-tab {
+  color: #9db9db;
+  background: #1b2430;
+}
+.diff-tab.active {
+  color: #bed8f7;
+  background: #243245;
+  border-top-color: #7ea6d4;
+}
 .diff-tab svg:first-child {
   color: #7ea6d4 !important;
 }
@@ -1489,6 +1498,17 @@ button.commit-branch svg:last-child {
 }
 .diff-count {
   color: #9aa7ae;
+}
+.diff-navigation {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+  padding-right: 10px;
+  border-right: 1px solid var(--border);
+}
+.diff-navigation .icon-button {
+  color: var(--text);
 }
 .diff-actions {
   display: flex;
@@ -1688,12 +1708,15 @@ button.commit-branch svg:last-child {
   z-index: 1;
 }
 .diff-host .cm-deletedChunk button.diff-revert {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
   color: #d1ddd8;
   background: #2f373d;
   border: 1px solid #3a444b;
-  font-family: var(--ui-font);
-  font-size: 11px;
-  padding: 1px 8px;
+  padding: 0;
 }
 .diff-host .cm-deletedChunk button.diff-revert:hover {
   background: #3a444b;

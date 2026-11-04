@@ -1,5 +1,5 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { EditorState } from '@codemirror/state';
 import { Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
@@ -379,8 +379,10 @@ export function App() {
   const [commitMessage, setCommitMessage] = useState('');
   const [committing, setCommitting] = useState(false);
   const commitInput = useRef<HTMLTextAreaElement>(null);
+  // 工作区与历史提交共用一个差异标签，切换文件时替换其中的内容。
   const [diffs, setDiffs] = useState<DiffTab[]>([]);
   const diffsRef = useRef<DiffTab[]>([]);
+  const diffRequest = useRef(0);
   const [unified, setUnified] = useState(false);
   // 正在进行的 Fetch、Pull 或 Push，同一时间只进行一个；分支弹窗的锚点。
   const [remoteTask, setRemoteTaskState] = useState<string | null>(null);
@@ -420,6 +422,42 @@ export function App() {
     : undefined;
   const dirtyCount = tabs.filter(isDirty).length;
   const repository = git?.kind === 'repository' ? git : null;
+  // 与提交面板保持同一文件顺序；目录模式按目录优先，折叠不影响导航。
+  const diffFiles = useMemo(() => {
+    if (selectedDiff?.commit) return selectedDiff.files ?? [];
+    const files = repository?.files ?? [];
+    const groups = [
+      files.filter((file) => file.kind !== 'untracked'),
+      files.filter((file) => file.kind === 'untracked'),
+    ];
+    if (changeTree)
+      for (const group of groups)
+        group.sort((a, b) => {
+          const left = a.path.split('/');
+          const right = b.path.split('/');
+          for (
+            let index = 0;
+            index < Math.min(left.length, right.length);
+            index++
+          ) {
+            if (left[index] === right[index]) continue;
+            const leftDir = index < left.length - 1;
+            const rightDir = index < right.length - 1;
+            if (leftDir !== rightDir) return leftDir ? -1 : 1;
+            return left[index].localeCompare(right[index]);
+          }
+          return left.length - right.length;
+        });
+    return groups.flat();
+  }, [
+    selectedDiff?.commit,
+    selectedDiff?.files,
+    repository?.files,
+    changeTree,
+  ]);
+  const diffFileIndex = diffFiles.findIndex(
+    (file) => file.path === selectedDiff?.path,
+  );
   const live = useLiveChanges(project, git, active === LIVE_TAB);
   const gitKinds = new Map<string, ChangeKind>(
     repository?.files.map((file) => [file.path, file.kind]) ?? [],
@@ -865,9 +903,14 @@ export function App() {
   async function loadDiff(path: string, original: string | null) {
     const workspace = projectRef.current;
     if (!workspace) return;
+    const request = ++diffRequest.current;
     try {
       const sources = await backend.gitDiff(workspace.id, path, original);
-      if (projectRef.current?.id !== workspace.id) return;
+      if (
+        projectRef.current?.id !== workspace.id ||
+        request !== diffRequest.current
+      )
+        return;
       // 内容未变化时保持视图，不打断滚动位置。
       const text = JSON.stringify(sources);
       updateDiffs(
@@ -880,7 +923,11 @@ export function App() {
         ),
       );
     } catch (error) {
-      if (projectRef.current?.id !== workspace.id) return;
+      if (
+        projectRef.current?.id !== workspace.id ||
+        request !== diffRequest.current
+      )
+        return;
       updateDiffs(
         diffsRef.current.map((diff) =>
           diff.key === path ? { ...diff, error: errorMessage(error) } : diff,
@@ -893,6 +940,7 @@ export function App() {
   async function loadCommitDiff(diff: DiffTab) {
     const workspace = projectRef.current;
     if (!workspace || !diff.commit) return;
+    const request = ++diffRequest.current;
     try {
       const sources = await backend.gitCommitDiff(
         workspace.id,
@@ -900,7 +948,11 @@ export function App() {
         diff.path,
         diff.original,
       );
-      if (projectRef.current?.id !== workspace.id) return;
+      if (
+        projectRef.current?.id !== workspace.id ||
+        request !== diffRequest.current
+      )
+        return;
       updateDiffs(
         diffsRef.current.map((item) =>
           item.key === diff.key
@@ -909,7 +961,11 @@ export function App() {
         ),
       );
     } catch (error) {
-      if (projectRef.current?.id !== workspace.id) return;
+      if (
+        projectRef.current?.id !== workspace.id ||
+        request !== diffRequest.current
+      )
+        return;
       updateDiffs(
         diffsRef.current.map((item) =>
           item.key === diff.key
@@ -920,8 +976,12 @@ export function App() {
     }
   }
 
-  /** 打开提交中一个文件的 Diff（与第一个父提交比较），只读。 */
-  function openCommitDiff(commit: CommitSummary, file: CommitFile) {
+  /** 在共用差异标签中查看提交文件，与第一个父提交比较，只读。 */
+  function openCommitDiff(
+    commit: CommitSummary,
+    file: CommitFile,
+    files: CommitFile[],
+  ) {
     if (busyRef.current || promptRef.current) return;
     // 文件路径不含 NUL，与工作区 Diff 的标识不会冲突。
     const key = `${commit.hash}\0${file.path}`;
@@ -938,21 +998,22 @@ export function App() {
           parent: commit.parents[0] ?? null,
           subject: commit.subject,
         },
+        files,
       };
-      updateDiffs([...diffsRef.current, diff]);
+      updateDiffs([diff]);
       void loadCommitDiff(diff);
     }
+    desiredFile.current = null;
     activate(DIFF_PREFIX + key);
     setOpening(null);
   }
 
-  /** 在主区打开或切换到文件的 Diff 标签。 */
+  /** 在共用差异标签中查看工作区文件，重复查看当前文件时保留视图。 */
   function openDiff(change: FileChange) {
     if (busyRef.current || promptRef.current) return;
     const existing = diffsRef.current.find((diff) => diff.key === change.path);
     if (!existing)
       updateDiffs([
-        ...diffsRef.current,
         {
           key: change.path,
           path: change.path,
@@ -963,9 +1024,35 @@ export function App() {
           commit: null,
         },
       ]);
+    desiredFile.current = null;
     activate(DIFF_PREFIX + change.path);
     setOpening(null);
     void loadDiff(change.path, change.original);
+  }
+
+  /** 到达当前文件边界后切换相邻文件，向前定位末处、向后定位首处，不循环。 */
+  function navigateDiffFile(direction: 1 | -1) {
+    if (busyRef.current || promptRef.current) return;
+    const current = diffsRef.current[0];
+    const index = diffFiles.findIndex((file) => file.path === current?.path);
+    const file = index >= 0 ? diffFiles[index + direction] : undefined;
+    if (!current || !file) return;
+    const diff: DiffTab = {
+      ...current,
+      key: current.commit ? `${current.commit.hash}\0${file.path}` : file.path,
+      path: file.path,
+      original: file.original,
+      sources: null,
+      error: null,
+      version: 0,
+      reveal: direction > 0 ? 'first' : 'last',
+    };
+    updateDiffs([diff]);
+    desiredFile.current = null;
+    activate(DIFF_PREFIX + diff.key);
+    setOpening(null);
+    if (diff.commit) void loadCommitDiff(diff);
+    else void loadDiff(diff.path, diff.original);
   }
 
   /**
@@ -4184,7 +4271,7 @@ export function App() {
               ))}
               {diffs.map((diff) => (
                 <div
-                  key={DIFF_PREFIX + diff.key}
+                  key="git-diff"
                   className={`tab diff-tab ${active === DIFF_PREFIX + diff.key ? 'active' : ''}`}
                   onContextMenu={(event) =>
                     showTabMenu(event, DIFF_PREFIX + diff.key)
@@ -4195,8 +4282,8 @@ export function App() {
                     aria-selected={active === DIFF_PREFIX + diff.key}
                     title={
                       diff.commit
-                        ? `${diff.path} 在 ${diff.commit.hash.slice(0, 7)} 中的变更 · ${diff.commit.subject}`
-                        : `${diff.path} 的变更`
+                        ? `Git 差异 · ${diff.path} · ${diff.commit.hash.slice(0, 7)} · ${diff.commit.subject}`
+                        : `Git 差异 · ${diff.path} · HEAD → 工作区`
                     }
                     onClick={() => {
                       desiredFile.current = null;
@@ -4215,14 +4302,8 @@ export function App() {
                     ) : (
                       <GitCompare size={13} />
                     )}
-                    <span
-                      className={
-                        !diff.commit && gitKinds.has(diff.path)
-                          ? `git-${gitKinds.get(diff.path)}`
-                          : undefined
-                      }
-                    >
-                      {baseName(diff.path)}
+                    <span>
+                      Git 差异 · {baseName(diff.path)}
                       {diff.commit && ` @ ${diff.commit.hash.slice(0, 7)}`}
                     </span>
                   </button>
@@ -4333,6 +4414,14 @@ export function App() {
               <div className="diff-layer">
                 <DiffView
                   diff={selectedDiff}
+                  revealFirstChange
+                  navigation={{
+                    previous: diffFileIndex > 0,
+                    next:
+                      diffFileIndex >= 0 &&
+                      diffFileIndex < diffFiles.length - 1,
+                    onFile: navigateDiffFile,
+                  }}
                   unified={unified}
                   onToggleUnified={() => setUnified((value) => !value)}
                   onOpenFile={(path) => void openFile(path)}

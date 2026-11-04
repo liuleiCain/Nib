@@ -22,7 +22,11 @@ interface Props {
   version: string;
   /** 当前打开的提交 Diff 标签标识（哈希 + NUL + 路径）。 */
   selected: string | null;
-  onOpenFile: (commit: CommitSummary, file: CommitFile) => void;
+  onOpenFile: (
+    commit: CommitSummary,
+    file: CommitFile,
+    files: CommitFile[],
+  ) => void;
   onCopy: (text: string) => void;
 }
 
@@ -216,6 +220,7 @@ export function LogPanel({
   function fileRow(commit: CommitSummary, file: CommitFile) {
     const style = changeStyle[file.kind];
     const key = `${commit.hash}\0${file.path}`;
+    const detail = details.get(commit.hash);
     return (
       <div
         className={`change-row ${selected === key ? 'selected' : ''}`}
@@ -224,7 +229,10 @@ export function LogPanel({
         <button
           className={`change-name git-${file.kind}`}
           title={`${file.original ? `${file.original} → ` : ''}${file.path} · ${style.label}`}
-          onClick={() => onOpenFile(commit, file)}
+          onClick={() => {
+            if (detail && typeof detail !== 'string')
+              onOpenFile(commit, file, detail.files);
+          }}
         >
           <span className="change-file">{baseName(file.path)}</span>
           {dirName(file.path) && (

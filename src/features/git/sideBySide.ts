@@ -133,8 +133,8 @@ export interface SideBySide {
   a: EditorView;
   b: EditorView;
   chunks: () => readonly Chunk[];
-  /** 跳到下一处或上一处变更，到末尾后循环。 */
-  navigate: (direction: 1 | -1) => void;
+  /** 定位指定变更块；越界时保持当前位置。 */
+  reveal: (index: number) => void;
   setSync: (sync: boolean) => void;
   destroy: () => void;
 }
@@ -190,8 +190,6 @@ export function sideBySide(config: Config): SideBySide {
 
   let chunks: readonly Chunk[] = [];
   let sync = config.sync;
-  let cursor = -1;
-  let cursorAt = -1;
   // 一帧内的滚动事件只保留最后的驱动侧，由同一测量周期完成同步与绘制。
   let pendingSource: EditorView | null = null;
   // 连接带随 CodeMirror 的测量周期重绘，与编辑器自身的布局读写合并，避免每帧多次排版。
@@ -551,31 +549,10 @@ export function sideBySide(config: Config): SideBySide {
     a,
     b,
     chunks: () => chunks,
-    navigate(direction) {
-      if (!chunks.length) return;
-      const head = b.state.selection.main.head;
-      // 刚跳转过时按序号前后移动；光标被移走后按光标位置查找。
-      let index: number;
-      if (cursor >= 0 && cursor < chunks.length && head === cursorAt)
-        index = (cursor + direction + chunks.length) % chunks.length;
-      else if (direction > 0) {
-        // 下一个：起点在光标之后的第一个变更块。
-        index = chunks.findIndex((chunk) => chunk.fromB > head);
-        if (index < 0) index = 0;
-      } else {
-        // 上一个：起点在光标之前、且不包含光标的最后一个变更块。
-        index = chunks.length - 1;
-        while (
-          index >= 0 &&
-          (chunks[index].fromB >= head || chunks[index].toB > head)
-        )
-          index--;
-        if (index < 0) index = chunks.length - 1;
-      }
+    reveal(index) {
       const chunk = chunks[index];
+      if (!chunk) return;
       const at = Math.min(chunk.fromB, b.state.doc.length);
-      cursor = index;
-      cursorAt = at;
       engage(b);
       b.dispatch({
         selection: { anchor: at },
@@ -589,7 +566,6 @@ export function sideBySide(config: Config): SideBySide {
           effects: EditorView.scrollIntoView(atA, { y: 'center' }),
         });
       }
-      b.focus();
     },
     setSync(next) {
       sync = next;

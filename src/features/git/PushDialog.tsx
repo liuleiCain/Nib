@@ -164,7 +164,11 @@ export function PushDialog({ projectId, onPush, onClose }: Props) {
   );
 
   /** 在右侧读取并显示文件在该提交中的 Diff（与第一个父提交比较）。 */
-  async function openFile(item: CommitSummary, file: CommitFile) {
+  async function openFile(
+    item: CommitSummary,
+    file: CommitFile,
+    reveal: 'first' | 'last' = 'first',
+  ) {
     const current = ++diffRequest.current;
     const next: DiffTab = {
       key: `${item.hash}\0${file.path}`,
@@ -178,6 +182,7 @@ export function PushDialog({ projectId, onPush, onClose }: Props) {
         parent: item.parents[0] ?? null,
         subject: item.subject,
       },
+      reveal,
     };
     setDiff(next);
     try {
@@ -217,6 +222,8 @@ export function PushDialog({ projectId, onPush, onClose }: Props) {
 
   function filesView() {
     if (!commit) return null;
+    const files = detail && typeof detail !== 'string' ? detail.files : [];
+    const index = files.findIndex((file) => file.path === diff?.path);
     if (diff)
       return (
         <div className="push-diff">
@@ -232,6 +239,16 @@ export function PushDialog({ projectId, onPush, onClose }: Props) {
           </button>
           <DiffView
             diff={diff}
+            revealFirstChange
+            navigation={{
+              previous: index > 0,
+              next: index >= 0 && index < files.length - 1,
+              onFile: (direction) => {
+                const file = index >= 0 ? files[index + direction] : undefined;
+                if (file)
+                  void openFile(commit, file, direction > 0 ? 'first' : 'last');
+              },
+            }}
             unified={unified}
             onToggleUnified={() => setUnified((value) => !value)}
             onOpenFile={() => {}}
