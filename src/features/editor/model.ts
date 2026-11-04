@@ -20,7 +20,15 @@ export interface Tab {
   revision: string;
   newline: Document['newline'];
   hasBom: boolean;
-  scroll: { top: number; left: number };
+  scroll: {
+    top: number;
+    left: number;
+    /** 按文档锚点恢复视口，避免重建后的行高测量覆盖像素位置。 */
+    snapshot?: {
+      doc: Text;
+      effect: ReturnType<EditorView['scrollSnapshot']>;
+    };
+  };
   /** 外部修改与未保存编辑冲突、文件无法读取或自动保存失败时暂停自动保存，避免覆盖外部修改。 */
   paused: boolean;
   /** 超大文件只读预览：只含开头部分，禁止编辑和保存。 */

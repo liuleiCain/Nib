@@ -30,6 +30,30 @@ import {
 import { sideBySide } from './sideBySide';
 import type { SideBySide } from './sideBySide';
 
+/** 差异标签暂时卸载时保留视口、导航位置与同步设置。 */
+interface DiffViewState {
+  scroll?: {
+    key: string;
+    right: {
+      doc: EditorState['doc'];
+      effect: ReturnType<EditorView['scrollSnapshot']>;
+    };
+    left?: {
+      doc: EditorState['doc'];
+      effect: ReturnType<EditorView['scrollSnapshot']>;
+    };
+  };
+  position?: {
+    key: string;
+    base: string;
+    current: string;
+    head: number;
+    index: number;
+  };
+  revealed?: string | null;
+  sync?: boolean;
+}
+
 /** 主区打开的一个 Diff 标签。 */
 export interface DiffTab {
   /** 标签标识：工作区 Diff 为路径，提交 Diff 为 哈希 + NUL + 路径。 */
@@ -47,6 +71,8 @@ export interface DiffTab {
   files?: CommitFile[];
   /** 跨文件导航的落点；普通打开默认定位首处变更。 */
   reveal?: 'first' | 'last';
+  /** 阅读状态随标签保留，切回已打开的差异时不重新定位。 */
+  view?: DiffViewState;
 }
 
 interface Props {
@@ -141,6 +167,7 @@ export function DiffView({
   navigation,
   jump = null,
 }: Props) {
+  const savedView = (diff.view ??= {});
   const host = useRef<HTMLDivElement>(null);
   const syntax = useRef(new Compartment());
   const editors = useRef<EditorView[]>([]);
@@ -153,24 +180,20 @@ export function DiffView({
     next: false,
   });
   // 切换对比模式或开发模式重建视图时，保留当前变更及其边界状态。
-  const position = useRef<{
-    key: string;
-    base: string;
-    current: string;
-    head: number;
-    index: number;
-  } | null>(null);
+  const position = useRef<NonNullable<DiffViewState['position']> | null>(
+    savedView.position ?? null,
+  );
   const revertRef = useRef(onRevert);
   revertRef.current = onRevert;
   // 回滚后会按新内容重建视图，记住滚动位置避免跳回顶部。
-  const scroll = useRef<{ key: string; top: number } | null>(null);
+  const scroll = useRef<DiffViewState['scroll']>(savedView.scroll);
   const [count, setCount] = useState(0);
   const [lines, setLines] = useState({ added: 0, removed: 0 });
   const synchronize = useRef<(() => void) | null>(null);
   // 回滚写入失败时递增，按原内容重建视图。
   const [reset, setReset] = useState(0);
   // 左右对比时两侧是否同步滚动；关闭后可分别滚动，连接带仍标出对应位置。
-  const [sync, setSync] = useState(true);
+  const [sync, setSync] = useState(savedView.sync ?? true);
   const split = useRef<SideBySide | null>(null);
   const syncRef = useRef(sync);
   syncRef.current = sync;
@@ -197,6 +220,7 @@ export function DiffView({
     path: diff.path,
     key: diff.key,
     reveal: diff.reveal,
+    memory: savedView,
   });
   content.current = {
     base,
@@ -205,9 +229,10 @@ export function DiffView({
     path: diff.path,
     key: diff.key,
     reveal: diff.reveal,
+    memory: savedView,
   };
   // 提交哈希也属于文件身份，查看同一路径的不同版本时分别定位。
-  const revealed = useRef<string | null>(null);
+  const revealed = useRef<string | null>(savedView.revealed ?? null);
   // 已执行的跳转，视图重建（回滚、切换视图）后不再重复定位。
   const jumped = useRef<number | null>(null);
   const pendingJump = () => {
@@ -255,12 +280,19 @@ export function DiffView({
           if (!saved && !disposed) setReset((value) => value + 1);
         });
     });
-    const restore = (scroller: HTMLElement) => {
-      const saved = scroll.current;
-      if (saved?.key === scrollKey && !pendingJump())
-        requestAnimationFrame(() => {
-          if (!disposed && !pendingJump()) scroller.scrollTop = saved.top;
-        });
+    const savedScroll =
+      scroll.current?.key === scrollKey && !pendingJump()
+        ? scroll.current
+        : null;
+    const restore = (
+      view: EditorView,
+      saved: NonNullable<DiffViewState['scroll']>['right'],
+    ) => {
+      const change = diffChange(saved.doc, view.state.doc.toString());
+      const effect = change
+        ? saved.effect.map(ChangeSet.of(change, saved.doc.length))
+        : saved.effect;
+      if (effect) view.dispatch({ effects: effect });
     };
     const collapse = { margin: 3, minSize: 8 };
     const diffConfig = { scanLimit: large ? 200 : 2000, timeout: 1500 };
@@ -364,12 +396,7 @@ export function DiffView({
       right = view;
       scroller = view.scrollDOM;
       setCount(chunkCount());
-      restore(view.scrollDOM);
       cleanup = () => {
-        scroll.current = {
-          key: `${displayedKey}:${unified}:${preview}`,
-          top: view.scrollDOM.scrollTop,
-        };
         view.destroy();
       };
     } else {
@@ -391,12 +418,7 @@ export function DiffView({
       right = view.b;
       scroller = view.b.scrollDOM;
       setCount(chunkCount());
-      restore(view.b.scrollDOM);
       cleanup = () => {
-        scroll.current = {
-          key: `${displayedKey}:${unified}:${preview}`,
-          top: view.b.scrollDOM.scrollTop,
-        };
         split.current = null;
         view.destroy();
       };
@@ -414,12 +436,14 @@ export function DiffView({
       }
     };
     let displayedKey = content.current.key;
+    let displayedMemory = content.current.memory;
     let lastPosition: number | null = null;
     /** 按最小替换区间更新文本，保留选区；收到跳转请求时定位最近写入的位置。 */
     synchronize.current = () => {
       const next = content.current;
       const changedFile = displayedKey !== next.key;
       displayedKey = next.key;
+      displayedMemory = next.memory;
       if (changedFile) lastPosition = null;
       const top = scroller.scrollTop;
       const leftDoc =
@@ -503,8 +527,33 @@ export function DiffView({
       updateNavigation();
     };
     synchronize.current();
+    // 导航选区先恢复，再让视口快照覆盖自动滚动，避免把阅读位置拉回光标。
+    if (savedScroll) {
+      restore(right, savedScroll.right);
+      if (left && savedScroll.left) restore(left, savedScroll.left);
+    }
+    let measured = false;
+    right.requestMeasure({
+      read: () => null,
+      write: () => {
+        measured = true;
+      },
+    });
     return () => {
       disposed = true;
+      // 首次布局前的开发模式重建尚未完成自动定位，不把零位置当作阅读快照。
+      if (measured)
+        scroll.current = {
+          key: `${displayedKey}:${unified}:${preview}`,
+          right: { doc: right.state.doc, effect: right.scrollSnapshot() },
+          left: left
+            ? { doc: left.state.doc, effect: left.scrollSnapshot() }
+            : undefined,
+        };
+      displayedMemory.scroll = scroll.current;
+      displayedMemory.position = position.current ?? undefined;
+      displayedMemory.revealed = revealed.current;
+      displayedMemory.sync = syncRef.current;
       navigate.current = null;
       synchronize.current = null;
       editors.current = [];

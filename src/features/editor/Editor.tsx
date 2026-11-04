@@ -1,9 +1,11 @@
 import { useLayoutEffect, useRef } from 'react';
 import { EditorView } from '@codemirror/view';
+import { ChangeSet } from '@codemirror/state';
 import type { EditorState } from '@codemirror/state';
 import type { Tab } from './model';
 import {
   editableCompartment,
+  diffChange,
   indentCompartment,
   indentation,
   wrapCompartment,
@@ -44,7 +46,9 @@ export function Editor({
   callback.current = onChange;
   const currentTab = useRef(tab);
   const switching = useRef(false);
+  const initialized = useRef(false);
   const revealed = useRef<number | null>(null);
+  const saveScroll = useRef<(() => void) | null>(null);
 
   useLayoutEffect(() => {
     if (!host.current) return;
@@ -58,7 +62,22 @@ export function Editor({
       },
     });
     viewRef.current = view;
+    initialized.current = false;
+    // 切到差异页会先隐藏宿主，必须在滚动时保存，不能等隐藏后再读取零位置。
+    const remember = () => {
+      const tab = currentTab.current;
+      if (!tab || switching.current || !view.scrollDOM.clientHeight) return;
+      tab.scroll = {
+        top: view.scrollDOM.scrollTop,
+        left: view.scrollDOM.scrollLeft,
+        snapshot: { doc: view.state.doc, effect: view.scrollSnapshot() },
+      };
+    };
+    saveScroll.current = remember;
+    view.scrollDOM.addEventListener('scroll', remember);
     return () => {
+      saveScroll.current = null;
+      view.scrollDOM.removeEventListener('scroll', remember);
       view.destroy();
       viewRef.current = null;
     };
@@ -68,13 +87,9 @@ export function Editor({
     const view = viewRef.current;
     if (!view) return;
     const previous = currentTab.current;
-    const changed = previous?.path !== tab?.path || previous !== tab;
-    if (previous && previous.path !== tab?.path) {
-      previous.scroll = {
-        top: view.scrollDOM.scrollTop,
-        left: view.scrollDOM.scrollLeft,
-      };
-    }
+    const changed =
+      !initialized.current || previous?.path !== tab?.path || previous !== tab;
+    if (previous && changed && initialized.current) saveScroll.current?.();
     currentTab.current = tab;
     if (!tab) return;
     switching.current = true;
@@ -101,12 +116,28 @@ export function Editor({
       });
       tab.state = view.state;
     }
-    switching.current = false;
     if (changed) {
-      view.scrollDOM.scrollTop = tab.scroll.top;
-      view.scrollDOM.scrollLeft = tab.scroll.left;
+      const saved = tab.scroll.snapshot;
+      if (saved) {
+        const change =
+          saved.doc === view.state.doc
+            ? null
+            : diffChange(saved.doc, view.state.doc.toString());
+        const effect = change
+          ? saved.effect.map(ChangeSet.of(change, saved.doc.length))
+          : saved.effect;
+        if (effect) view.dispatch({ effects: effect });
+        tab.state = view.state;
+      } else {
+        view.scrollDOM.scrollTop = tab.scroll.top;
+        view.scrollDOM.scrollLeft = tab.scroll.left;
+        view.dispatch({ effects: view.scrollSnapshot() });
+        tab.state = view.state;
+      }
       view.focus();
     }
+    switching.current = false;
+    initialized.current = true;
   }, [tab, wrap, indent, locked, viewRef]);
 
   // 在切换标签、恢复滚动位置之后选中并滚动到目标位置；同一次定位只执行一次。

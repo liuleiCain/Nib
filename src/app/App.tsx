@@ -27,7 +27,6 @@ import {
   GitCompare,
   GitMerge,
   History,
-  Keyboard,
   LoaderCircle,
   LocateFixed,
   PanelLeft,
@@ -1046,6 +1045,7 @@ export function App() {
       error: null,
       version: 0,
       reveal: direction > 0 ? 'first' : 'last',
+      view: undefined,
     };
     updateDiffs([diff]);
     desiredFile.current = null;
@@ -4655,13 +4655,6 @@ export function App() {
             aria-pressed={wrap}
           >
             <WrapText size={13} />
-          </button>
-          <button
-            onClick={showPalette}
-            title="命令与快捷键"
-            aria-label="命令与快捷键"
-          >
-            <Keyboard size={14} />
           </button>
         </div>
       </footer>
