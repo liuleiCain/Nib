@@ -62,16 +62,40 @@ const lineChanges = StateField.define<LineChanges>({
   },
 });
 
+/** 修改标记虚线的周期（3px 线段 + 2px 间隔），与下方主题保持一致。 */
+const DASH = 5;
+
+/**
+ * 每行一个标记：只在变更块的首尾留出间隙，块内相邻行连成一条；
+ * phase 为该行顶部在文档中的偏移对虚线周期取余，跨行时虚线保持连续。
+ */
 class ChangeMarker extends GutterMarker {
-  constructor(readonly kind: 'added' | 'modified' | 'deleted') {
+  constructor(
+    readonly kind: 'added' | 'modified' | 'deleted',
+    readonly first = true,
+    readonly last = true,
+    readonly phase = 0,
+  ) {
     super();
   }
   eq(other: ChangeMarker) {
-    return other.kind === this.kind;
+    return (
+      other.kind === this.kind &&
+      other.first === this.first &&
+      other.last === this.last &&
+      other.phase === this.phase
+    );
   }
   toDOM() {
     const element = document.createElement('div');
     element.className = `cm-git-${this.kind}`;
+    if (this.kind !== 'deleted') {
+      element.style.top = this.first ? '1px' : '0';
+      element.style.bottom = this.last ? '1px' : '0';
+      // 背景从元素顶部开始绘制，按文档位置平移，使各行拼接成同一段虚线。
+      if (this.kind === 'modified')
+        element.style.backgroundPositionY = `${-(this.phase + (this.first ? 1 : 0))}px`;
+    }
     element.title = labels[this.kind];
     return element;
   }
@@ -85,7 +109,6 @@ const labels = {
 
 const markers = {
   added: new ChangeMarker('added'),
-  modified: new ChangeMarker('modified'),
   deleted: new ChangeMarker('deleted'),
 };
 
@@ -271,19 +294,27 @@ const changeGutter = gutter({
         builder.add(doc.lineAt(at).from, doc.lineAt(at).from, markers.deleted);
         continue;
       }
-      const marker =
-        chunk.fromA === chunk.toA ? markers.added : markers.modified;
+      const kind = chunk.fromA === chunk.toA ? 'added' : 'modified';
       const first = doc.lineAt(Math.min(chunk.fromB, doc.length)).number;
       const last = doc.lineAt(Math.max(chunk.fromB, chunk.endB)).number;
       for (let number = first; number <= last; number++) {
         const line = doc.line(number);
-        builder.add(line.from, line.from, marker);
+        // 行高可能是小数（如 22.75px），保留小数相位，接缝处才不会错开。
+        const phase =
+          kind === 'modified' ? view.lineBlockAt(line.from).top % DASH : 0;
+        builder.add(
+          line.from,
+          line.from,
+          new ChangeMarker(kind, number === first, number === last, phase),
+        );
       }
     }
     return builder.finish();
   },
+  // 虚线相位取决于行的纵向位置，换行或字号变化导致行高改变时也要重算。
   lineMarkerChange: (update) =>
-    update.startState.field(lineChanges) !== update.state.field(lineChanges),
+    update.startState.field(lineChanges) !== update.state.field(lineChanges) ||
+    update.heightChanged,
   initialSpacer: () => markers.added,
   domEventHandlers: {
     mousedown(view, line, event) {
@@ -341,7 +372,8 @@ const changeTheme = EditorView.theme({
   },
   '.cm-git-added, .cm-git-modified': {
     position: 'absolute',
-    inset: '1px 0',
+    left: '0',
+    right: '0',
     borderRadius: '1px',
   },
   '.cm-git-added': { background: 'var(--git-added)' },

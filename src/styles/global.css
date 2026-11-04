@@ -1554,6 +1554,122 @@ button.commit-branch svg:last-child {
 .diff-host .cm-changedLineGutter {
   background: var(--diff-inserted) !important;
 }
+/* 左右对比（src/features/git/sideBySide.ts）：两侧各自滚动，中间连接带标出对应的变更。 */
+.diff-host.side-by-side {
+  display: flex;
+  overflow: hidden;
+}
+.diff-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+.diff-pane > .cm-editor {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+.diff-connector {
+  position: relative;
+  flex: 0 0 44px;
+  overflow: hidden;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+.diff-connector svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.diff-band {
+  stroke-width: 1;
+}
+.diff-band-modified {
+  fill: #6fa8ff26;
+  stroke: #6fa8ff70;
+}
+.diff-band-inserted {
+  fill: #45b8c429;
+  stroke: #45b8c470;
+}
+.diff-band-deleted {
+  fill: #e0884f29;
+  stroke: #e0884f70;
+}
+.diff-connector-buttons button.diff-revert {
+  position: absolute;
+  left: 50%;
+  width: 22px;
+  height: 18px;
+  margin-left: -11px;
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+}
+.diff-connector-buttons button.diff-revert:hover {
+  color: var(--text);
+  background: #ffffff14;
+}
+/* 行背景与连接带同色：修改为蓝，新增为青，删除为橙。 */
+.diff-host .cm-diff-modified {
+  background-color: #6fa8ff14;
+}
+.diff-host .cm-diff-inserted {
+  background-color: #45b8c414;
+}
+.diff-host .cm-diff-deleted {
+  background-color: #e0884f17;
+}
+.diff-host .cm-diff-text {
+  border-radius: 2px;
+  background: #6fa8ff3d;
+}
+/* 本侧为空时在插入位置画一条与对侧同色的细线。 */
+.diff-host .cm-diff-gap-before,
+.diff-host .cm-diff-gap-after {
+  position: relative;
+}
+.diff-host .cm-diff-gap-before::before,
+.diff-host .cm-diff-gap-after::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  pointer-events: none;
+}
+.diff-host .cm-diff-gap-before::before {
+  top: -1px;
+}
+.diff-host .cm-diff-gap-after::after {
+  bottom: -1px;
+}
+.diff-host .cm-diff-gap-inserted::before,
+.diff-host .cm-diff-gap-inserted::after {
+  background: #45b8c4a0;
+}
+.diff-host .cm-diff-gap-deleted::before,
+.diff-host .cm-diff-gap-deleted::after {
+  background: #e0884fa0;
+}
+.diff-host .cm-diff-gutter {
+  width: 3px;
+}
+.diff-host .cm-diff-gutter .cm-gutterElement {
+  padding: 0;
+}
+.diff-host .cm-diff-gutter-modified {
+  background: var(--git-renamed);
+}
+.diff-host .cm-diff-gutter-inserted {
+  background: var(--diff-inserted);
+}
+.diff-host .cm-diff-gutter-deleted {
+  background: var(--diff-deleted);
+}
 /* 回滚按钮：左右对比时在两栏之间，统一视图在变更块右上角。 */
 .diff-host .cm-merge-revert {
   background: var(--panel);

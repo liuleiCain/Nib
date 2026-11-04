@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
-  MergeView,
   getChunks,
   goToNextChunk,
   goToPreviousChunk,
@@ -17,6 +16,8 @@ import {
   ChevronUp,
   Columns2,
   FileCode2,
+  Link2,
+  Link2Off,
   LoaderCircle,
   Rows2,
   Undo2,
@@ -28,6 +29,8 @@ import {
   editorTheme,
   language,
 } from '../editor/model';
+import { sideBySide } from './sideBySide';
+import type { SideBySide } from './sideBySide';
 
 /** 主区打开的一个 Diff 标签。 */
 export interface DiffTab {
@@ -78,16 +81,6 @@ const sideLabel = (side: Side): string | null => {
   }
 };
 
-/** 左右对比时两栏之间的回滚按钮。 */
-const revertButton = () => {
-  const button = document.createElement('button');
-  button.className = 'diff-revert';
-  button.textContent = '»';
-  button.title = '回滚此处变更';
-  button.setAttribute('aria-label', '回滚此处变更');
-  return button;
-};
-
 /** 统一视图中变更块右上角的按钮：只提供回滚，不提供“接受”。 */
 const chunkControl = (
   type: 'accept' | 'reject',
@@ -130,6 +123,11 @@ export function DiffView({
   const synchronize = useRef<(() => void) | null>(null);
   // 回滚写入失败时递增，按原内容重建视图。
   const [reset, setReset] = useState(0);
+  // 左右对比时两侧是否同步滚动；关闭后可分别滚动，连接带仍标出对应位置。
+  const [sync, setSync] = useState(true);
+  const split = useRef<SideBySide | null>(null);
+  const syncRef = useRef(sync);
+  syncRef.current = sync;
   const sources = diff.sources;
   const base = sources?.base.kind === 'text' ? sources.base.content : '';
   const current =
@@ -239,35 +237,32 @@ export function DiffView({
         view.destroy();
       };
     } else {
-      const view = new MergeView({
+      const view = sideBySide({
         parent,
-        a: { doc: content.current.base, extensions: shared },
-        b: {
-          doc: content.current.current,
-          extensions: [shared, revertListener],
-        },
-        gutter: true,
-        revertControls: revertible ? 'a-to-b' : undefined,
-        renderRevertControl: revertButton,
-        collapseUnchanged: collapse,
+        base: content.current.base,
+        current: content.current.current,
+        extensions: shared,
+        currentExtensions: revertListener,
+        revertible,
+        highlight: !large,
         diffConfig,
+        sync: syncRef.current,
       });
-      chunkCount = () => view.chunks.length;
-      chunks = () => view.chunks;
+      split.current = view;
+      chunkCount = () => view.chunks().length;
+      chunks = () => view.chunks();
       left = view.a;
       right = view.b;
-      scroller = parent;
+      scroller = view.b.scrollDOM;
       setCount(chunkCount());
-      restore(parent);
-      navigate.current = (direction) => {
-        (direction > 0 ? goToNextChunk : goToPreviousChunk)(view.b);
-        view.b.focus();
-      };
+      restore(view.b.scrollDOM);
+      navigate.current = view.navigate;
       cleanup = () => {
         scroll.current = {
           key: `${displayedPath}:${unified}:${preview}`,
-          top: parent.scrollTop,
+          top: view.b.scrollDOM.scrollTop,
         };
+        split.current = null;
         view.destroy();
       };
     }
@@ -375,6 +370,10 @@ export function DiffView({
     synchronize.current?.();
   }, [base, current, diff.path, diff.version, jump]);
 
+  useEffect(() => {
+    split.current?.setSync(sync);
+  }, [sync]);
+
   // F7 / Shift+F7 跳到下一处或上一处变更，与 GoLand 一致。
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
@@ -435,6 +434,22 @@ export function DiffView({
           >
             <ChevronDown size={15} />
           </button>
+          {!unified && !preview && (
+            <button
+              className={`icon-button ${sync ? 'active' : ''}`}
+              title={
+                sync
+                  ? '同步滚动已开启，点击后左右两侧可分别滚动'
+                  : '左右两侧分别滚动，点击开启同步滚动'
+              }
+              aria-label="同步滚动"
+              aria-pressed={sync}
+              disabled={!comparable}
+              onClick={() => setSync((value) => !value)}
+            >
+              {sync ? <Link2 size={14} /> : <Link2Off size={14} />}
+            </button>
+          )}
           <button
             className="icon-button"
             title={unified ? '切换为左右对比' : '切换为统一视图'}
@@ -477,7 +492,7 @@ export function DiffView({
         <div
           ref={host}
           key={`${reset}:${unified}:${preview}:${revertible}:${large}`}
-          className={`diff-host ${unified || preview ? 'unified' : 'split'}`}
+          className={`diff-host ${unified || preview ? 'unified' : 'split side-by-side'}`}
         />
       )}
     </div>
